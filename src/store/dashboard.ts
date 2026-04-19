@@ -94,7 +94,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         { label: '实时功率', value: `${live.photovoltaic.powerKw} kW`, emphasis: true },
         { label: '累计发电', value: `${live.photovoltaic.todayGenerationKwh} kWh` },
         { label: '辐照强度', value: `${live.photovoltaic.irradianceWm2} W/m²` },
-        { label: '发电效率', value: `${live.photovoltaic.efficiencyPct.toFixed(1)}%` },
+        { label: '组件转换效率', value: `${live.photovoltaic.efficiencyPct.toFixed(1)}%` },
         { label: '面板温度', value: `${live.photovoltaic.panelTempC.toFixed(1)}℃` },
         { label: '波动系数', value: `${live.photovoltaic.fluctuationPct.toFixed(1)}%` },
       ];

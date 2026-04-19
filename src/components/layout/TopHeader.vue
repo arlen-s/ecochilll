@@ -63,7 +63,7 @@ const store = useDashboardStore();
 const scenarios: Array<{ label: string; value: ScenarioMode }> = [
   { label: '正常模式', value: 'normal' },
   { label: '高温模式', value: 'heatwave' },
-  { label: '阴天模式', value: 'cloudy' },
+  { label: '云遮挡模式', value: 'cloudy' },
   { label: '高峰电价', value: 'peakPricing' },
 ];
 

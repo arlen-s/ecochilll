@@ -2,7 +2,7 @@
   <div class="left-panel panel-grid">
     <SectionCard title="光伏发电模块" eyebrow="PHOTOVOLTAIC" accent="green">
       <template #actions>
-        <span class="metric-chip">发电效率 {{ live.photovoltaic.efficiencyPct.toFixed(1) }}%</span>
+        <span class="metric-chip">组件转换效率 {{ live.photovoltaic.efficiencyPct.toFixed(1) }}%</span>
       </template>
 
       <div class="metric-stack">
