@@ -134,7 +134,7 @@ const getStorageDispatchBoost = (scenario: ScenarioMode, hour: number) => {
 };
 
 const getPhotovoltaicEfficiencyPct = (panelTempC: number, meta: (typeof scenarioMeta)[ScenarioMode]) =>
-  clamp(23.2 + meta.pvFactor * 1.1 - meta.cloud * 1.8 - Math.max(panelTempC - 25, 0) * 0.08, 18.2, 23.4);
+  clamp(21 + meta.pvFactor * 0.4 - meta.cloud * 1 - Math.max(panelTempC - 25, 0) * 0.045, 17.5, 20.8);
 
 export const buildHourlySeries = (scenario: ScenarioMode): HourlyPoint[] => {
   const meta = scenarioMeta[scenario];
@@ -389,7 +389,7 @@ const buildEnergyMix = (hourly: HourlyPoint[]): EnergyMixItem[] => {
   ];
 };
 
-const buildNodes = (scenario: ScenarioMode, hourly: HourlyPoint[]): SystemNodeStatus[] => {
+const buildNodes = (scenario: ScenarioMode, hourly: HourlyPoint[], photovoltaicEfficiencyPct: number): SystemNodeStatus[] => {
   const live = hourly[14];
   const meta = scenarioMeta[scenario];
 
@@ -400,7 +400,7 @@ const buildNodes = (scenario: ScenarioMode, hourly: HourlyPoint[]): SystemNodeSt
       type: 'pv',
       powerKw: live.photovoltaicKw,
       state: live.photovoltaicKw > 280 ? '高效发电' : '波动发电',
-      efficiencyPct: clamp(86 + meta.pvFactor * 3 - meta.cloud * 4, 78, 92),
+      efficiencyPct: photovoltaicEfficiencyPct,
       detail: '双层屋顶光伏矩阵，支持辐照联动动态功率演示。',
     },
     {
@@ -596,7 +596,7 @@ export const buildScenarioData = (scenario: ScenarioMode): DashboardScenarioData
     hourly,
     weekly,
     ai: buildAiDecision(scenario, hourly),
-    nodes: buildNodes(scenario, hourly),
+    nodes: buildNodes(scenario, hourly, photovoltaicEfficiencyPct),
   };
 };
 
