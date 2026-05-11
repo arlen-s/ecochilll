@@ -20,6 +20,7 @@ if ! command -v nginx >/dev/null 2>&1; then
 fi
 
 mkdir -p "${CURRENT_DIR}"
+find "${CURRENT_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 tar -xzf "${ARCHIVE_PATH}" -C "${CURRENT_DIR}"
 
 if [[ -f "${NGINX_CONF_SRC}" ]]; then
