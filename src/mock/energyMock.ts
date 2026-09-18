@@ -74,6 +74,7 @@ const STANDING_LOSS_PCT_PER_HOUR = 0.001;
 const STEP_DURATION_HOURS = 1;
 const INITIAL_STORAGE_LEVEL = 0.32;
 const GRID_EMISSION_FACTOR_KG_PER_KWH = 0.62;
+const BASE_PUMP_ELECTRIC_POWER_KW = 2;
 
 const electricalPeakHours = new Set([10, 11, 14, 15, 16, 18, 19, 20]);
 
@@ -306,6 +307,42 @@ const calculatePointPeakReductionPct = (point: HourlyPoint, plantCop: number) =>
   );
 };
 
+interface HourlyEconomicsInput {
+  photovoltaicKw: number;
+  baseElectricLoadKw: number;
+  gridImportKw: number;
+  thermalLoadKwTh: number;
+  priceCny: number;
+}
+
+interface HourlyEconomicsComparison {
+  actualGridCostCny: number;
+  noPvNoStorageGridCostCny: number;
+  samePvNoStorageGridCostCny: number;
+  overallSavingCny: number;
+  storageBenefitCny: number;
+}
+
+const compareHourlyGridCosts = (
+  point: HourlyEconomicsInput,
+  plantCop: number,
+): HourlyEconomicsComparison => {
+  const noStorageTotalLoadKw =
+    point.baseElectricLoadKw + point.thermalLoadKwTh / plantCop + BASE_PUMP_ELECTRIC_POWER_KW;
+  const noStorageGridImportKw = Math.max(0, noStorageTotalLoadKw - point.photovoltaicKw);
+  const actualGridCostCny = point.gridImportKw * point.priceCny;
+  const noPvNoStorageGridCostCny = noStorageTotalLoadKw * point.priceCny;
+  const samePvNoStorageGridCostCny = noStorageGridImportKw * point.priceCny;
+
+  return {
+    actualGridCostCny,
+    noPvNoStorageGridCostCny,
+    samePvNoStorageGridCostCny,
+    overallSavingCny: noPvNoStorageGridCostCny - actualGridCostCny,
+    storageBenefitCny: samePvNoStorageGridCostCny - actualGridCostCny,
+  };
+};
+
 export const buildHourlySeries = (
   scenario: ScenarioMode,
   operationMode: OperatingMode,
@@ -326,7 +363,7 @@ export const buildHourlySeries = (
     const ambientTempC = getAmbientTemperature(operationMode, hour, meta);
     const thermalLoadKwTh = getThermalLoad(operationMode, hour, ambientTempC, meta);
     const baseElectricLoadKw = getBaseElectricLoad(hour, meta);
-    const noDispatchPumpElectricPowerKw = 2;
+    const noDispatchPumpElectricPowerKw = BASE_PUMP_ELECTRIC_POWER_KW;
     const noStoragePlantElectricPowerKw = thermalLoadKwTh / config.plantCop;
     const noDispatchElectricLoadKw =
       baseElectricLoadKw + noStoragePlantElectricPowerKw + noDispatchPumpElectricPowerKw;
@@ -374,16 +411,21 @@ export const buildHourlySeries = (
     const plantElectricPowerKw =
       (plantDirectThermalKwTh + storageChargeKwTh) / config.plantCop;
     const pumpElectricPowerKw =
-      2 + (storageChargeKwTh + storageDischargeKwTh) * 0.018;
+      BASE_PUMP_ELECTRIC_POWER_KW + (storageChargeKwTh + storageDischargeKwTh) * 0.018;
     const totalElectricLoadKw =
       baseElectricLoadKw + plantElectricPowerKw + pumpElectricPowerKw;
     const electricDifferenceKw = photovoltaicKw - totalElectricLoadKw;
     const gridImportKw = Math.max(0, -electricDifferenceKw);
     const gridExportKw = Math.max(0, electricDifferenceKw);
     const directPvDisplacementKw = Math.min(photovoltaicKw, totalElectricLoadKw);
-    const noStorageGridImportKw = Math.max(0, noDispatchElectricLoadKw - photovoltaicKw);
-    const storageAvoidedGridImportKw = Math.max(0, noStorageGridImportKw - gridImportKw);
     const priceCny = Number(getPrice(hour, meta.priceFactor).toFixed(2));
+    const economicsComparison = compareHourlyGridCosts({
+      photovoltaicKw,
+      baseElectricLoadKw,
+      gridImportKw,
+      thermalLoadKwTh,
+      priceCny,
+    }, config.plantCop);
 
     return {
       hour: hourLabel(hour),
@@ -401,7 +443,7 @@ export const buildHourlySeries = (
       storedEnergyKwhTh,
       storageLevelPct: storageStep.storageLevelPct,
       carbonReductionKg: directPvDisplacementKw * GRID_EMISSION_FACTOR_KG_PER_KWH,
-      savingCny: directPvDisplacementKw * priceCny + storageAvoidedGridImportKw * priceCny,
+      savingCny: economicsComparison.overallSavingCny,
       priceCny,
       irradianceWm2: Math.round(920 * solarCurve * meta.pvFactor * occlusionFactor),
       ambientTempC,
@@ -410,11 +452,9 @@ export const buildHourlySeries = (
 };
 
 const buildWeeklyStats = (
-  scenario: ScenarioMode,
   operationMode: OperatingMode,
   hourly: HourlyPoint[],
 ): WeeklyStat[] => {
-  const meta = getScenarioMeta(scenario, operationMode);
   const config = THERMAL_STORAGE_CONFIG[operationMode];
   const basePv = hourly.reduce((sum, item) => sum + item.photovoltaicKw, 0);
   const baseLoad = hourly.reduce((sum, item) => sum + item.totalElectricLoadKw, 0);
@@ -432,9 +472,7 @@ const buildWeeklyStats = (
       carbonReductionKg: Math.round(
         hourly.reduce((sum, item) => sum + item.carbonReductionKg, 0) * dayFactor,
       ),
-      benefitCny: Math.round(
-        hourly.reduce((sum, item) => sum + item.savingCny, 0) * dayFactor * meta.priceFactor,
-      ),
+      benefitCny: Math.round(hourly.reduce((sum, item) => sum + item.savingCny, 0) * dayFactor),
     };
   });
 };
@@ -667,10 +705,14 @@ export const buildScenarioData = (
   const meta = getScenarioMeta(scenario, operationMode);
   const config = THERMAL_STORAGE_CONFIG[operationMode];
   const hourly = buildHourlySeries(scenario, operationMode);
-  const weekly = buildWeeklyStats(scenario, operationMode, hourly);
+  const weekly = buildWeeklyStats(operationMode, hourly);
   const live = hourly[14];
   const pvDay = hourly.reduce((sum, item) => sum + item.photovoltaicKw, 0);
   const savingTotal = hourly.reduce((sum, item) => sum + item.savingCny, 0);
+  const storageBenefitTotal = hourly.reduce(
+    (sum, item) => sum + compareHourlyGridCosts(item, config.plantCop).storageBenefitCny,
+    0,
+  );
   const carbonTotal = hourly.reduce((sum, item) => sum + item.carbonReductionKg, 0);
   const panelTempC = Number((live.ambientTempC + 13 + meta.pvFactor * 4).toFixed(1));
   const photovoltaicEfficiencyPct = Number(getPhotovoltaicEfficiencyPct(panelTempC, meta).toFixed(1));
@@ -721,11 +763,9 @@ export const buildScenarioData = (
   };
 
   const economics: EconomicMetrics = {
-    dailySavingCny: Math.round(savingTotal),
+    dailySavingCny: savingTotal,
     monthlySavingCny: Math.round(savingTotal * 29.4),
-    peakValleyBenefitCny: Math.round(
-      hourly.reduce((sum, item) => sum + item.storageDischargeKwTh * item.priceCny / config.plantCop, 0),
-    ),
+    peakValleyBenefitCny: storageBenefitTotal,
     roiTrendPct: Number((12.6 + meta.priceFactor * 2.3 + meta.savingBias).toFixed(1)),
     annualForecastCny: Math.round(savingTotal * 365 * 0.84),
   };
@@ -782,6 +822,12 @@ export const deriveLiveSnapshot = (
   const savingProgress = data.hourly
     .slice(0, hourIndex + 1)
     .reduce((sum, item) => sum + item.savingCny, 0);
+  const storageBenefitProgress = data.hourly
+    .slice(0, hourIndex + 1)
+    .reduce(
+      (sum, item) => sum + compareHourlyGridCosts(item, config.plantCop).storageBenefitCny,
+      0,
+    );
   const carbonProgress = data.hourly
     .slice(0, hourIndex + 1)
     .reduce((sum, item) => sum + item.carbonReductionKg, 0);
@@ -847,10 +893,8 @@ export const deriveLiveSnapshot = (
     },
     economics: {
       ...data.economics,
-      dailySavingCny: Math.round(savingProgress),
-      peakValleyBenefitCny: Math.round(
-        data.economics.peakValleyBenefitCny * (0.78 + point.priceCny / 2),
-      ),
+      dailySavingCny: savingProgress,
+      peakValleyBenefitCny: storageBenefitProgress,
     },
     gridImportKw: point.gridImportKw,
   };

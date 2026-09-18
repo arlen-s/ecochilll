@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateSensibleHeatCapacity } from '@/domain/thermalStorage';
+import { calculateSensibleHeatCapacity, stepThermalStorage } from '@/domain/thermalStorage';
 import type { OperatingMode, ScenarioMode } from '@/types/energy';
 import {
   buildHourlySeries,
@@ -14,10 +14,10 @@ const operationModes: OperatingMode[] = ['cooling', 'heating'];
 
 const expectedConfig: Record<
   OperatingMode,
-  { volumeM3: number; supplyTempC: number; returnTempC: number }
+  { volumeM3: number; supplyTempC: number; returnTempC: number; plantCop: number }
 > = {
-  cooling: { volumeM3: 180, supplyTempC: 6, returnTempC: 13 },
-  heating: { volumeM3: 180, supplyTempC: 45, returnTempC: 35 },
+  cooling: { volumeM3: 180, supplyTempC: 6, returnTempC: 13, plantCop: 5.2 },
+  heating: { volumeM3: 180, supplyTempC: 45, returnTempC: 35, plantCop: 3.4 },
 };
 
 describe.each(operationModes)('%s water thermal-storage mock', (operationMode) => {
@@ -59,7 +59,7 @@ describe.each(operationModes)('%s water thermal-storage mock', (operationMode) =
       }
     });
 
-    it('returns finite non-negative power, energy, price, carbon, and saving values', () => {
+    it('returns finite non-negative power, energy, price, and carbon values', () => {
       const hourly = buildHourlySeries(scenario, operationMode);
 
       for (const point of hourly) {
@@ -78,7 +78,6 @@ describe.each(operationModes)('%s water thermal-storage mock', (operationMode) =
           point.storedEnergyKwhTh,
           point.storageLevelPct,
           point.carbonReductionKg,
-          point.savingCny,
           point.priceCny,
           point.irradianceWm2,
         ];
@@ -88,6 +87,96 @@ describe.each(operationModes)('%s water thermal-storage mock', (operationMode) =
           expect(value).toBeGreaterThanOrEqual(0);
         }
       }
+    });
+
+    it('converts plant thermal production to electricity using the exact mode COP', () => {
+      const hourly = buildHourlySeries(scenario, operationMode);
+      const { plantCop } = expectedConfig[operationMode];
+
+      for (const point of hourly) {
+        expect(point.plantElectricPowerKw).toBeCloseTo(
+          (point.plantDirectThermalKwTh + point.storageChargeKwTh) / plantCop,
+          10,
+        );
+      }
+    });
+
+    it('carries stored thermal energy through the exact hourly loss and efficiency recurrence', () => {
+      const hourly = buildHourlySeries(scenario, operationMode);
+      const data = buildScenarioData(scenario, operationMode);
+      let previousStoredEnergyKwhTh = data.storage.capacityKwhTh * 0.32;
+
+      for (const point of hourly) {
+        const expectedStep = stepThermalStorage({
+          capacityKwhTh: data.storage.capacityKwhTh,
+          storedEnergyKwhTh: previousStoredEnergyKwhTh,
+          durationHours: 1,
+          chargePowerKwTh: point.storageChargeKwTh,
+          dischargePowerKwTh: point.storageDischargeKwTh,
+          chargeEfficiency: 0.94,
+          dischargeEfficiency: 0.92,
+          standingLossPctPerHour: 0.001,
+        });
+
+        expect(point.storedEnergyKwhTh).toBeCloseTo(expectedStep.storedEnergyKwhTh, 9);
+        previousStoredEnergyKwhTh = point.storedEnergyKwhTh;
+      }
+    });
+
+    it('prices overall savings against a no-PV, no-storage grid bill', () => {
+      const data = buildScenarioData(scenario, operationMode);
+      const { plantCop } = expectedConfig[operationMode];
+      const expectedHourlySavings = data.hourly.map((point) => {
+        const baselineGridCostCny = (
+          point.baseElectricLoadKw + point.thermalLoadKwTh / plantCop + 2
+        ) * point.priceCny;
+        const actualGridCostCny = point.gridImportKw * point.priceCny;
+        return baselineGridCostCny - actualGridCostCny;
+      });
+      const expectedDailySavingCny = expectedHourlySavings.reduce((sum, value) => sum + value, 0);
+
+      data.hourly.forEach((point, index) => {
+        expect(point.savingCny).toBeCloseTo(expectedHourlySavings[index], 9);
+      });
+      expect(data.economics.dailySavingCny).toBeCloseTo(expectedDailySavingCny, 9);
+    });
+
+    it('prices storage benefit against the same-PV no-storage grid bill', () => {
+      const data = buildScenarioData(scenario, operationMode);
+      const { plantCop } = expectedConfig[operationMode];
+      const expectedStorageBenefitCny = data.hourly.reduce((sum, point) => {
+        const noStorageTotalLoadKw =
+          point.baseElectricLoadKw + point.thermalLoadKwTh / plantCop + 2;
+        const noStorageGridImportKw = Math.max(0, noStorageTotalLoadKw - point.photovoltaicKw);
+        return sum + (
+          noStorageGridImportKw * point.priceCny - point.gridImportKw * point.priceCny
+        );
+      }, 0);
+
+      expect(data.economics.peakValleyBenefitCny).toBeCloseTo(expectedStorageBenefitCny, 9);
+    });
+
+    it('reconciles live signed storage benefit from the first through final hour', () => {
+      const data = buildScenarioData(scenario, operationMode);
+      const { plantCop } = expectedConfig[operationMode];
+      const storageBenefitAt = (index: number) => {
+        const point = data.hourly[index];
+        const noStorageTotalLoadKw =
+          point.baseElectricLoadKw + point.thermalLoadKwTh / plantCop + 2;
+        const noStorageGridImportKw = Math.max(0, noStorageTotalLoadKw - point.photovoltaicKw);
+        return noStorageGridImportKw * point.priceCny - point.gridImportKw * point.priceCny;
+      };
+      const firstHourBenefitCny = storageBenefitAt(0);
+      const firstSnapshot = deriveLiveSnapshot(data, 0);
+      const finalSnapshot = deriveLiveSnapshot(data, data.hourly.length - 1);
+
+      expect(firstHourBenefitCny).toBeLessThan(0);
+      expect(firstSnapshot.economics.peakValleyBenefitCny).toBeCloseTo(firstHourBenefitCny, 9);
+      expect(finalSnapshot.economics.peakValleyBenefitCny).toBeCloseTo(
+        data.economics.peakValleyBenefitCny,
+        9,
+      );
+      expect(finalSnapshot.economics.dailySavingCny).toBeCloseTo(data.economics.dailySavingCny, 9);
     });
 
     it('uses the configured water tank capacity and mode temperatures', () => {
@@ -139,6 +228,17 @@ describe.each(operationModes)('%s water thermal-storage mock', (operationMode) =
           expect(point.photovoltaicKw).toBeGreaterThanOrEqual(point.totalElectricLoadKw);
         }
       }
+    }
+  });
+
+  it('applies only the day variation factor to already-priced weekly benefits', () => {
+    for (const scenario of scenarios) {
+      const data = buildScenarioData(scenario, operationMode);
+
+      data.weekly.forEach((day, index) => {
+        const dayFactor = 0.92 + index * 0.03;
+        expect(day.benefitCny).toBe(Math.round(data.economics.dailySavingCny * dayFactor));
+      });
     }
   });
 });
