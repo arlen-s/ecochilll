@@ -82,6 +82,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
   let chapterStartedAt = 0;
   let chapterRemainingMs = 0;
   let chapterTotalMs = 0;
+  let latestScenarioRequestId = 0;
+  let latestPresentationTransitionId = 0;
 
   const liveSnapshot = computed(() => deriveLiveSnapshot(scenarioData.value, liveHourIndex.value));
   const selectedNode = computed<SystemNodeStatus>(
@@ -256,14 +258,15 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const refreshScenarioData = async (
     nextScenario = scenario.value,
     nextOperationMode = operationMode.value,
-  ) => {
-    scenario.value = nextScenario;
-    operationMode.value = nextOperationMode;
+  ): Promise<boolean> => {
+    const requestId = ++latestScenarioRequestId;
     loading.value = true;
     loadError.value = '';
 
     try {
       const data = await dashboardService.getScenarioData(nextScenario, nextOperationMode);
+      if (requestId !== latestScenarioRequestId) return false;
+
       scenarioData.value = data;
       scenario.value = data.scenario;
       operationMode.value = data.operationMode;
@@ -274,7 +277,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
       if (!data.nodes.some((item) => item.id === selectedNodeId.value)) {
         selectedNodeId.value = data.nodes[0]?.id ?? 'pv';
       }
+      return true;
     } catch (error) {
+      if (requestId !== latestScenarioRequestId) return false;
+
       loadError.value = error instanceof Error ? error.message : '数据源加载失败，已切回本地模拟数据。';
       scenarioData.value = buildScenarioData(nextScenario, nextOperationMode);
       scenario.value = scenarioData.value.scenario;
@@ -283,8 +289,14 @@ export const useDashboardStore = defineStore('dashboard', () => {
         ...buildRuntimeMeta(resolveDashboardDataSource()),
         providerLabel: 'Mock Twin Engine / Fallback',
       };
+      if (!scenarioData.value.nodes.some((item) => item.id === selectedNodeId.value)) {
+        selectedNodeId.value = scenarioData.value.nodes[0]?.id ?? 'pv';
+      }
+      return true;
     } finally {
-      loading.value = false;
+      if (requestId === latestScenarioRequestId) {
+        loading.value = false;
+      }
     }
   };
 
@@ -345,6 +357,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
   };
 
   const goToChapter = async (index: number) => {
+    const transitionId = ++latestPresentationTransitionId;
+    clearPresentationTimer();
     const chapter = presentationChapters.value[index];
 
     if (!chapter) {
@@ -354,26 +368,25 @@ export const useDashboardStore = defineStore('dashboard', () => {
       chapterStartedAt = 0;
       chapterRemainingMs = 0;
       chapterTotalMs = 0;
-      clearPresentationTimer();
       return;
     }
+
+    const scenarioChanged = scenario.value !== chapter.scenario;
+    const operationModeChanged = operationMode.value !== chapter.operationMode;
+    let dataApplied = true;
+
+    if (scenarioChanged || operationModeChanged) {
+      dataApplied = await refreshScenarioData(chapter.scenario, chapter.operationMode);
+    }
+
+    if (transitionId !== latestPresentationTransitionId || !dataApplied) return;
 
     currentChapterIndex.value = index;
     presentationActive.value = true;
     presentationPaused.value = false;
-
-    const scenarioChanged = scenario.value !== chapter.scenario;
-    const operationModeChanged = operationMode.value !== chapter.operationMode;
-    scenario.value = chapter.scenario;
-    operationMode.value = chapter.operationMode;
-
-    if (scenarioChanged || operationModeChanged) {
-      await refreshScenarioData(chapter.scenario, chapter.operationMode);
-    }
-
     liveHourIndex.value = chapter.hourIndex;
-    setFocus(chapter.focus);
     selectNode(chapter.nodeId);
+    setFocus(chapter.focus);
     scheduleCurrentChapter(chapter.durationMs, chapter.durationMs);
   };
 
@@ -388,6 +401,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const nextPresentationChapter = async () => {
     const nextIndex = presentationActive.value ? currentChapterIndex.value + 1 : currentChapterIndex.value;
     if (nextIndex >= presentationChapters.value.length) {
+      latestPresentationTransitionId += 1;
       presentationActive.value = false;
       presentationPaused.value = false;
       presentationProgressPct.value = 100;
@@ -454,6 +468,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   };
 
   const stop = () => {
+    latestPresentationTransitionId += 1;
     if (clockTimer) window.clearInterval(clockTimer);
     if (autoplayTimer) window.clearInterval(autoplayTimer);
     if (focusTimer) window.clearInterval(focusTimer);

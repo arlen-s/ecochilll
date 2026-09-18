@@ -1,9 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { buildScenarioData } from '@/mock/energyMock';
+import { dashboardService } from '@/services/dashboardService';
+import type { DashboardScenarioData } from '@/types/energy';
 import { useDashboardStore } from './dashboard';
+
+const deferred = <T>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
+};
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -69,5 +84,92 @@ describe('dashboard operation mode', () => {
     expect(store.selectedNodeDetail.recommendation).toContain('峰前');
     expect(store.selectedNodeDetail.recommendation).toContain('热量');
     expect(store.selectedNodeDetail.recommendation).toContain('最低储备');
+  });
+
+  it('keeps the newest operation mode when requests resolve in reverse order', async () => {
+    const olderRequest = deferred<DashboardScenarioData>();
+    const newerRequest = deferred<DashboardScenarioData>();
+    vi.spyOn(dashboardService, 'getScenarioData')
+      .mockImplementationOnce(() => olderRequest.promise)
+      .mockImplementationOnce(() => newerRequest.promise);
+    setActivePinia(createPinia());
+    const store = useDashboardStore();
+
+    const olderSwitch = store.setOperationMode('cooling');
+    const newerSwitch = store.setOperationMode('heating');
+
+    newerRequest.resolve(buildScenarioData('normal', 'heating'));
+    await newerSwitch;
+    olderRequest.resolve(buildScenarioData('normal', 'cooling'));
+    await olderSwitch;
+
+    expect(store.operationMode).toBe('heating');
+    expect(store.scenarioData.operationMode).toBe('heating');
+    expect(store.scenarioData.storage.operationMode).toBe('heating');
+    expect(store.loading).toBe(false);
+  });
+
+  it('ignores a stale rejection after a newer request succeeds', async () => {
+    const olderRequest = deferred<DashboardScenarioData>();
+    const newerRequest = deferred<DashboardScenarioData>();
+    vi.spyOn(dashboardService, 'getScenarioData')
+      .mockImplementationOnce(() => olderRequest.promise)
+      .mockImplementationOnce(() => newerRequest.promise);
+    setActivePinia(createPinia());
+    const store = useDashboardStore();
+
+    const olderSwitch = store.setOperationMode('cooling');
+    const newerSwitch = store.setOperationMode('heating');
+
+    newerRequest.resolve(buildScenarioData('normal', 'heating'));
+    await newerSwitch;
+    olderRequest.reject(new Error('stale request failed'));
+    await olderSwitch;
+
+    expect(store.operationMode).toBe('heating');
+    expect(store.scenarioData.operationMode).toBe('heating');
+    expect(store.loadError).toBe('');
+    expect(store.runtimeMeta.providerLabel).not.toContain('Fallback');
+    expect(store.loading).toBe(false);
+  });
+
+  it('keeps the newest presentation chapter when transitions resolve in reverse order', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('window', {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+    const olderRequest = deferred<DashboardScenarioData>();
+    const newerRequest = deferred<DashboardScenarioData>();
+    vi.spyOn(dashboardService, 'getScenarioData')
+      .mockImplementationOnce(() => olderRequest.promise)
+      .mockImplementationOnce(() => newerRequest.promise);
+    setActivePinia(createPinia());
+    const store = useDashboardStore();
+
+    store.presentationActive = true;
+    store.currentChapterIndex = 4;
+    const olderTransition = store.nextPresentationChapter();
+    store.currentChapterIndex = 2;
+    const newerTransition = store.nextPresentationChapter();
+
+    newerRequest.resolve(buildScenarioData('cloudy', 'cooling'));
+    await newerTransition;
+    olderRequest.resolve(buildScenarioData('heatwave', 'heating'));
+    await olderTransition;
+
+    expect(store.currentChapterIndex).toBe(3);
+    expect(store.currentChapter?.id).toBe('chapter-04');
+    expect(store.scenario).toBe('cloudy');
+    expect(store.operationMode).toBe('cooling');
+    expect(store.scenarioData.scenario).toBe('cloudy');
+    expect(store.scenarioData.operationMode).toBe('cooling');
+    expect(store.liveHourIndex).toBe(14);
+    expect(store.focus).toBe('storage');
+    expect(store.selectedNodeId).toBe('storage');
+    expect(store.presentationActive).toBe(true);
+    expect(store.presentationPaused).toBe(false);
+    expect(store.presentationProgressPct).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
   });
 });
