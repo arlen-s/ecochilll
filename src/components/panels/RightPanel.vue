@@ -129,7 +129,7 @@ const displayStatus = (status: AirConditionStatus) => {
 }
 
 .load-chart {
-  height: 120px;
+  height: 180px;
 }
 
 .right-panel {
