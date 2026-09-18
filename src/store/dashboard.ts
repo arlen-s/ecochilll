@@ -13,10 +13,12 @@ import type {
   FocusView,
   NodeDetailData,
   NodeDetailMetric,
+  OperatingMode,
   PresentationChapter,
   ScenarioMode,
   SystemAlert,
   SystemNodeStatus,
+  ThermalStorageState,
 } from '@/types/energy';
 
 const focusOrder: FocusView[] = ['overview', 'pv', 'ac', 'storage'];
@@ -28,13 +30,41 @@ const zoneByNodeId = {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
+const getStorageDisplayTerms = (operationMode: OperatingMode) => operationMode === 'cooling'
+  ? {
+      level: '蓄冷水位',
+      availableEnergy: '可用冷量',
+      chargePower: '充冷功率',
+      dischargePower: '放冷功率',
+      chargingState: '充冷中',
+      dischargingState: '放冷中',
+      recommendation: '峰前预充冷量，放冷削峰时保留最低储备，兼顾高峰保障与后续调度余量。',
+    }
+  : {
+      level: '蓄热水位',
+      availableEnergy: '可用热量',
+      chargePower: '充热功率',
+      dischargePower: '放热功率',
+      chargingState: '充热中',
+      dischargingState: '放热中',
+      recommendation: '峰前预充热量，放热削峰时保留最低储备，兼顾高峰保障与后续调度余量。',
+    };
+
+const getStorageStateLabel = (operationMode: OperatingMode, state: ThermalStorageState) => {
+  const terms = getStorageDisplayTerms(operationMode);
+  if (state === 'charging') return terms.chargingState;
+  if (state === 'discharging') return terms.dischargingState;
+  return '保温待机';
+};
+
 export const useDashboardStore = defineStore('dashboard', () => {
   const scenario = ref<ScenarioMode>('normal');
+  const operationMode = ref<OperatingMode>('cooling');
   const focus = ref<FocusView>('overview');
   const liveHourIndex = ref(14);
   const currentTime = ref(new Date());
   const selectedNodeId = ref('pv');
-  const scenarioData = ref(buildScenarioData(scenario.value));
+  const scenarioData = ref(buildScenarioData(scenario.value, operationMode.value));
   const runtimeMeta = ref<DashboardRuntimeMeta>(buildRuntimeMeta(resolveDashboardDataSource()));
   const presentationChapters = ref<PresentationChapter[]>(buildPresentationScript());
   const currentChapterIndex = ref(0);
@@ -70,13 +100,13 @@ export const useDashboardStore = defineStore('dashboard', () => {
       let value = item.gridImportKw;
 
       if (node.type === 'pv') value = item.photovoltaicKw;
-      if (node.type === 'ac') value = item.loadKw;
-      if (node.type === 'storage') value = Math.max(item.storageChargeKw, item.storageDischargeKw);
+      if (node.type === 'ac') value = item.thermalLoadKwTh;
+      if (node.type === 'storage') value = item.storageLevelPct;
       if (node.type === 'grid') value = item.gridImportKw;
 
       if (node.id in zoneByNodeId) {
         const ratio = [0.34, 0.27, 0.22][zoneByNodeId[node.id as keyof typeof zoneByNodeId]];
-        value = Math.round(item.loadKw * ratio);
+        value = Math.round(item.thermalLoadKwTh * ratio);
       }
 
       return {
@@ -103,7 +133,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     if (node.id in zoneByNodeId) {
       const zone = live.airConditioning.zones[zoneByNodeId[node.id as keyof typeof zoneByNodeId]];
       return [
-        { label: '区域负荷', value: `${zone.loadKw} kW`, emphasis: true },
+        { label: '区域热负荷', value: `${zone.loadKwTh.toFixed(1)} kWth`, emphasis: true },
         { label: '室内温度', value: `${zone.indoorTempC.toFixed(1)}℃` },
         { label: '目标温度', value: `${zone.targetTempC.toFixed(1)}℃` },
         { label: '舒适度', value: `${zone.comfortPct.toFixed(0)}%` },
@@ -114,7 +144,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
     if (node.type === 'ac') {
       return [
-        { label: '总负荷', value: `${live.airConditioning.totalLoadKw} kW`, emphasis: true },
+        { label: '总热负荷', value: `${live.airConditioning.thermalLoadKwTh.toFixed(1)} kWth`, emphasis: true },
         { label: '运行状态', value: live.airConditioning.runningStatus },
         { label: '室外温度', value: `${live.airConditioning.outdoorTempC.toFixed(1)}℃` },
         { label: '平均室温', value: `${live.airConditioning.indoorAvgTempC.toFixed(1)}℃` },
@@ -124,13 +154,16 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
 
     if (node.type === 'storage') {
+      const terms = getStorageDisplayTerms(live.storage.operationMode);
       return [
-        { label: 'SOC', value: `${live.storage.socPct.toFixed(1)}%`, emphasis: true },
-        { label: '容量', value: `${live.storage.capacityKwh} kWh` },
-        { label: '充电功率', value: `${live.storage.chargePowerKw} kW` },
-        { label: '放电功率', value: `${live.storage.dischargePowerKw} kW` },
-        { label: '健康度', value: `${live.storage.healthPct.toFixed(1)}%` },
-        { label: '循环次数', value: `${live.storage.cycleCount}` },
+        { label: terms.level, value: `${live.storage.storageLevelPct.toFixed(1)}%`, emphasis: true },
+        { label: terms.availableEnergy, value: `${live.storage.storedEnergyKwhTh.toFixed(1)} kWhth` },
+        { label: terms.chargePower, value: `${live.storage.chargePowerKwTh.toFixed(1)} kWth` },
+        { label: terms.dischargePower, value: `${live.storage.dischargePowerKwTh.toFixed(1)} kWth` },
+        { label: '供水温度', value: `${live.storage.supplyTempC.toFixed(1)}℃` },
+        { label: '回水温度', value: `${live.storage.returnTempC.toFixed(1)}℃` },
+        { label: '可用时长', value: `${live.storage.availableHours.toFixed(1)} h` },
+        { label: '水罐容积', value: `${live.storage.tankVolumeM3.toFixed(0)} m³` },
       ];
     }
 
@@ -146,7 +179,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
 
     return [
-      { label: '当前功率', value: `${node.powerKw} kW`, emphasis: true },
+      { label: '当前功率', value: `${node.powerValue.toFixed(1)} ${node.powerUnit}`, emphasis: true },
       { label: '运行状态', value: node.state },
       { label: '效率评分', value: `${node.efficiencyPct.toFixed(0)}%` },
     ];
@@ -158,7 +191,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
     if (node.type === 'pv') return '保持高光照窗口下的直供优先策略，并同步补能储电。';
     if (node.type === 'ac') return '根据人流与温度变化动态调整分区送风，兼顾舒适与削峰。';
-    if (node.type === 'storage') return '围绕峰谷电价维持健康 SOC 区间，增强晚峰段放电价值。';
+    if (node.type === 'storage') return getStorageDisplayTerms(liveSnapshot.value.operationMode).recommendation;
     if (node.type === 'grid') return '将电网侧功率维持在可控区间，避免峰段形成新的需量峰值。';
     return '维持当前协同策略，重点观察负荷变化与舒适度反馈。';
   };
@@ -173,7 +206,11 @@ export const useDashboardStore = defineStore('dashboard', () => {
     return {
       nodeId: node.id,
       title: node.label,
-      subtitle: `${scenarioData.value.scenarioLabel} / ${liveSnapshot.value.hourLabel} / ${node.state}`,
+      subtitle: `${scenarioData.value.scenarioLabel} / ${liveSnapshot.value.hourLabel} / ${
+        node.type === 'storage'
+          ? getStorageStateLabel(liveSnapshot.value.operationMode, liveSnapshot.value.storage.state)
+          : node.state
+      }`,
       healthScore: clamp(Math.round(node.efficiencyPct + 6 - healthPenalty), 62, 99),
       recommendation: buildNodeRecommendation(node),
       strategyLink: scenarioData.value.ai.title,
@@ -213,13 +250,20 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }, durationMs);
   };
 
-  const refreshScenarioData = async (mode = scenario.value) => {
+  const refreshScenarioData = async (
+    nextScenario = scenario.value,
+    nextOperationMode = operationMode.value,
+  ) => {
+    scenario.value = nextScenario;
+    operationMode.value = nextOperationMode;
     loading.value = true;
     loadError.value = '';
 
     try {
-      const data = await dashboardService.getScenarioData(mode);
+      const data = await dashboardService.getScenarioData(nextScenario, nextOperationMode);
       scenarioData.value = data;
+      scenario.value = data.scenario;
+      operationMode.value = data.operationMode;
       runtimeMeta.value = {
         ...runtimeMeta.value,
         lastUpdated: new Date().toISOString(),
@@ -229,7 +273,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
       }
     } catch (error) {
       loadError.value = error instanceof Error ? error.message : '数据源加载失败，已切回本地模拟数据。';
-      scenarioData.value = buildScenarioData(mode);
+      scenarioData.value = buildScenarioData(nextScenario, nextOperationMode);
+      scenario.value = scenarioData.value.scenario;
+      operationMode.value = scenarioData.value.operationMode;
       runtimeMeta.value = {
         ...buildRuntimeMeta(resolveDashboardDataSource()),
         providerLabel: 'Mock Twin Engine / Fallback',
@@ -257,12 +303,15 @@ export const useDashboardStore = defineStore('dashboard', () => {
       loading.value = false;
     }
 
-    await refreshScenarioData(scenario.value);
+    await refreshScenarioData(scenario.value, operationMode.value);
   };
 
   const setScenario = async (mode: ScenarioMode) => {
-    scenario.value = mode;
-    await refreshScenarioData(mode);
+    await refreshScenarioData(mode, operationMode.value);
+  };
+
+  const setOperationMode = async (mode: OperatingMode) => {
+    await refreshScenarioData(scenario.value, mode);
   };
 
   const setFocus = (nextFocus: FocusView) => {
@@ -310,8 +359,13 @@ export const useDashboardStore = defineStore('dashboard', () => {
     presentationActive.value = true;
     presentationPaused.value = false;
 
-    if (scenario.value !== chapter.scenario) {
-      await setScenario(chapter.scenario);
+    const scenarioChanged = scenario.value !== chapter.scenario;
+    const operationModeChanged = operationMode.value !== chapter.operationMode;
+    scenario.value = chapter.scenario;
+    operationMode.value = chapter.operationMode;
+
+    if (scenarioChanged || operationModeChanged) {
+      await refreshScenarioData(chapter.scenario, chapter.operationMode);
     }
 
     liveHourIndex.value = chapter.hourIndex;
@@ -408,6 +462,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
   return {
     scenario,
+    operationMode,
     focus,
     liveHourIndex,
     currentTime,
@@ -429,6 +484,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     currentChapter,
     initialize,
     setScenario,
+    setOperationMode,
     setFocus,
     selectNode,
     openDetail,
