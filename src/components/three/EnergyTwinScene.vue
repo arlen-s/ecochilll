@@ -27,9 +27,9 @@
           <button class="zoom-controls__btn zoom-controls__btn--wide" type="button" @click="sceneApi?.resetZoom()">重置</button>
         </div>
         <div class="legend">
-          <span><i class="legend__dot legend__dot--green"></i> 光伏直供</span>
-          <span><i class="legend__dot legend__dot--blue"></i> 协同输能</span>
-          <span><i class="legend__dot legend__dot--yellow"></i> 储能削峰</span>
+          <span><i class="legend__dot legend__dot--green"></i> 光伏/电网供电</span>
+          <span><i class="legend__dot" :style="{ background: thermalLegend.chargeColor }"></i> {{ thermalLegend.charge }}</span>
+          <span><i class="legend__dot" :style="{ background: thermalLegend.dischargeColor }"></i> {{ thermalLegend.discharge }}</span>
         </div>
         <div class="scene-alerts">
           <article
@@ -67,21 +67,24 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { createEnergyScene } from '@/three/createEnergyScene';
 import { useDashboardStore } from '@/store/dashboard';
-import type { FocusView, ScenarioMode } from '@/types/energy';
+import type { FocusView, OperatingMode, ScenarioMode, ThermalStorageMetrics } from '@/types/energy';
 
 const store = useDashboardStore();
 const sceneRoot = ref<HTMLElement | null>(null);
 const hoverTip = ref<{ id: string; label: string; x: number; y: number } | null>(null);
 const sceneAlerts = ref(store.activeAlerts.slice(0, 2));
+const thermalLegend = computed(() => store.operationMode === 'cooling'
+  ? { charge: '充冷', discharge: '放冷', chargeColor: '#28e0ff', dischargeColor: '#4d8dff' }
+  : { charge: '充热', discharge: '放热', chargeColor: '#ff9f43', dischargeColor: '#ff5d5d' });
 
 const focusOptions: Array<{ label: string; value: FocusView }> = [
   { label: '总览视角', value: 'overview' },
   { label: '光伏视角', value: 'pv' },
   { label: '空调视角', value: 'ac' },
-  { label: '储能视角', value: 'storage' },
+  { label: '水蓄能视角', value: 'storage' },
 ];
 
 let sceneApi:
@@ -92,6 +95,8 @@ let sceneApi:
       zoomOut: () => void;
       resetZoom: () => void;
       updateScenario: (scenario: ScenarioMode) => void;
+      updateOperatingMode: (mode: OperatingMode) => void;
+      updateThermalState: (storage: ThermalStorageMetrics) => void;
       updateAlerts: (nodeIds: string[]) => void;
       updateSelected: (id: string) => void;
       dispose: () => void;
@@ -113,6 +118,8 @@ onMounted(() => {
   });
 
   sceneApi.updateScenario(store.scenario);
+  sceneApi.updateOperatingMode(store.operationMode);
+  sceneApi.updateThermalState(store.liveSnapshot.storage);
   sceneApi.setFocus(store.focus);
   sceneApi.updateAlerts(store.activeAlerts.map((item) => item.nodeId));
   sceneApi.updateSelected(store.selectedNodeId);
@@ -127,6 +134,17 @@ watch(
 watch(
   () => store.scenario,
   (value) => sceneApi?.updateScenario(value),
+);
+
+watch(
+  () => store.operationMode,
+  (value) => sceneApi?.updateOperatingMode(value),
+);
+
+watch(
+  () => store.liveSnapshot.storage,
+  (value) => sceneApi?.updateThermalState(value),
+  { deep: true },
 );
 
 watch(
