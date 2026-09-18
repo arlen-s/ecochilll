@@ -4,11 +4,11 @@ export interface ThermalStorageStepInput {
   capacityKwhTh: number;
   storedEnergyKwhTh: number;
   durationHours: number;
-  requestedChargePowerKwTh: number;
-  requestedDischargePowerKwTh: number;
+  chargePowerKwTh: number;
+  dischargePowerKwTh: number;
   chargeEfficiency: number;
   dischargeEfficiency: number;
-  standingLossKwTh: number;
+  standingLossPctPerHour: number;
 }
 
 export interface ThermalStorageStepResult {
@@ -37,13 +37,16 @@ export function stepThermalStorage(input: ThermalStorageStepInput): ThermalStora
   validateStepInput(input);
 
   const initialStoredEnergy = clamp(input.storedEnergyKwhTh, 0, input.capacityKwhTh);
-  const standingLossKwhTh = Math.min(initialStoredEnergy, input.standingLossKwTh * input.durationHours);
+  const standingLossKwhTh = Math.min(
+    initialStoredEnergy,
+    initialStoredEnergy * input.standingLossPctPerHour * input.durationHours,
+  );
   const storedAfterStandingLoss = initialStoredEnergy - standingLossKwhTh;
 
-  if (input.requestedChargePowerKwTh > 0) {
+  if (input.chargePowerKwTh > 0) {
     const remainingCapacityKwhTh = input.capacityKwhTh - storedAfterStandingLoss;
     const acceptedChargePowerKwTh = Math.min(
-      input.requestedChargePowerKwTh,
+      input.chargePowerKwTh,
       remainingCapacityKwhTh / input.chargeEfficiency / input.durationHours,
     );
     const storedEnergyKwhTh = clamp(
@@ -55,9 +58,9 @@ export function stepThermalStorage(input: ThermalStorageStepInput): ThermalStora
     return createStepResult(storedEnergyKwhTh, input.capacityKwhTh, acceptedChargePowerKwTh, 0, standingLossKwhTh);
   }
 
-  if (input.requestedDischargePowerKwTh > 0) {
+  if (input.dischargePowerKwTh > 0) {
     const deliveredDischargePowerKwTh = Math.min(
-      input.requestedDischargePowerKwTh,
+      input.dischargePowerKwTh,
       storedAfterStandingLoss * input.dischargeEfficiency / input.durationHours,
     );
     const storedEnergyKwhTh = clamp(
@@ -76,13 +79,13 @@ function validateStepInput(input: ThermalStorageStepInput): void {
   assertNonNegativeFinite('capacityKwhTh', input.capacityKwhTh);
   assertNonNegativeFinite('storedEnergyKwhTh', input.storedEnergyKwhTh);
   assertPositiveFinite('durationHours', input.durationHours);
-  assertNonNegativeFinite('requestedChargePowerKwTh', input.requestedChargePowerKwTh);
-  assertNonNegativeFinite('requestedDischargePowerKwTh', input.requestedDischargePowerKwTh);
+  assertNonNegativeFinite('chargePowerKwTh', input.chargePowerKwTh);
+  assertNonNegativeFinite('dischargePowerKwTh', input.dischargePowerKwTh);
   assertEfficiency('chargeEfficiency', input.chargeEfficiency);
   assertEfficiency('dischargeEfficiency', input.dischargeEfficiency);
-  assertNonNegativeFinite('standingLossKwTh', input.standingLossKwTh);
+  assertNonNegativeFinite('standingLossPctPerHour', input.standingLossPctPerHour);
 
-  if (input.requestedChargePowerKwTh > 0 && input.requestedDischargePowerKwTh > 0) {
+  if (input.chargePowerKwTh > 0 && input.dischargePowerKwTh > 0) {
     throw new Error('charge and discharge must be mutually exclusive');
   }
 }

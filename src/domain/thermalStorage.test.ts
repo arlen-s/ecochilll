@@ -15,11 +15,11 @@ describe('thermal storage domain', () => {
       capacityKwhTh: 700,
       storedEnergyKwhTh: 680,
       durationHours: 1,
-      requestedChargePowerKwTh: 100,
-      requestedDischargePowerKwTh: 0,
+      chargePowerKwTh: 100,
+      dischargePowerKwTh: 0,
       chargeEfficiency: 0.94,
       dischargeEfficiency: 0.94,
-      standingLossKwTh: 0,
+      standingLossPctPerHour: 0,
     });
 
     expect(result.storedEnergyKwhTh).toBe(700);
@@ -31,11 +31,11 @@ describe('thermal storage domain', () => {
       capacityKwhTh: 700,
       storedEnergyKwhTh: 350,
       durationHours: 1,
-      requestedChargePowerKwTh: 40,
-      requestedDischargePowerKwTh: 30,
+      chargePowerKwTh: 40,
+      dischargePowerKwTh: 30,
       chargeEfficiency: 0.94,
       dischargeEfficiency: 0.94,
-      standingLossKwTh: 0,
+      standingLossPctPerHour: 0,
     })).toThrow('charge and discharge must be mutually exclusive');
   });
 
@@ -49,11 +49,11 @@ describe('thermal storage domain', () => {
       capacityKwhTh: 700,
       storedEnergyKwhTh: 50,
       durationHours: 1,
-      requestedChargePowerKwTh: 0,
-      requestedDischargePowerKwTh: 100,
+      chargePowerKwTh: 0,
+      dischargePowerKwTh: 100,
       chargeEfficiency: 0.94,
       dischargeEfficiency: 0.9,
-      standingLossKwTh: 10,
+      standingLossPctPerHour: 0.2,
     });
 
     expect(result.standingLossKwhTh).toBe(10);
@@ -61,16 +61,16 @@ describe('thermal storage domain', () => {
     expect(result.storedEnergyKwhTh).toBe(0);
   });
 
-  it('applies standing loss while on standby', () => {
+  it('applies linear per-hour fractional standing loss while on standby', () => {
     const result = stepThermalStorage({
       capacityKwhTh: 700,
       storedEnergyKwhTh: 100,
       durationHours: 2,
-      requestedChargePowerKwTh: 0,
-      requestedDischargePowerKwTh: 0,
+      chargePowerKwTh: 0,
+      dischargePowerKwTh: 0,
       chargeEfficiency: 0.94,
       dischargeEfficiency: 0.94,
-      standingLossKwTh: 5,
+      standingLossPctPerHour: 0.05,
     });
 
     expect(result.standingLossKwhTh).toBe(10);
@@ -85,11 +85,11 @@ describe('thermal storage domain', () => {
       capacityKwhTh: 700,
       storedEnergyKwhTh: 350,
       durationHours: 0,
-      requestedChargePowerKwTh: 0,
-      requestedDischargePowerKwTh: 0,
+      chargePowerKwTh: 0,
+      dischargePowerKwTh: 0,
       chargeEfficiency: 0.94,
       dischargeEfficiency: 0.94,
-      standingLossKwTh: 0,
+      standingLossPctPerHour: 0,
     })).toThrow();
   });
 });
