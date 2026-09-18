@@ -172,4 +172,65 @@ describe('dashboard operation mode', () => {
     expect(store.presentationProgressPct).toBe(0);
     expect(vi.getTimerCount()).toBe(1);
   });
+
+  it('combines concurrent selector changes using the latest requested values', async () => {
+    const heatingRequest = deferred<DashboardScenarioData>();
+    const cloudyRequest = deferred<DashboardScenarioData>();
+    const getScenarioData = vi.spyOn(dashboardService, 'getScenarioData')
+      .mockImplementationOnce(() => heatingRequest.promise)
+      .mockImplementationOnce(() => cloudyRequest.promise);
+    setActivePinia(createPinia());
+    const store = useDashboardStore();
+
+    const heatingSwitch = store.setOperationMode('heating');
+    const cloudySwitch = store.setScenario('cloudy');
+
+    cloudyRequest.resolve(buildScenarioData('cloudy', 'heating'));
+    await cloudySwitch;
+    heatingRequest.resolve(buildScenarioData('normal', 'heating'));
+    await heatingSwitch;
+
+    expect(getScenarioData).toHaveBeenNthCalledWith(1, 'normal', 'heating');
+    expect(getScenarioData).toHaveBeenNthCalledWith(2, 'cloudy', 'heating');
+    expect(store.scenario).toBe('cloudy');
+    expect(store.operationMode).toBe('heating');
+    expect(store.scenarioData.scenario).toBe('cloudy');
+    expect(store.scenarioData.operationMode).toBe('heating');
+  });
+
+  it('keeps chapter one data when restart supersedes a pending transition request', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('window', {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+    const olderRequest = deferred<DashboardScenarioData>();
+    const getScenarioData = vi.spyOn(dashboardService, 'getScenarioData')
+      .mockImplementationOnce(() => olderRequest.promise);
+    setActivePinia(createPinia());
+    const store = useDashboardStore();
+
+    store.presentationActive = true;
+    store.currentChapterIndex = 4;
+    const olderTransition = store.nextPresentationChapter();
+    await store.restartPresentation();
+    const loadingAfterRestart = store.loading;
+
+    olderRequest.resolve(buildScenarioData('heatwave', 'heating'));
+    await olderTransition;
+
+    expect(getScenarioData).toHaveBeenCalledTimes(1);
+    expect(loadingAfterRestart).toBe(false);
+    expect(store.loading).toBe(false);
+    expect(store.currentChapterIndex).toBe(0);
+    expect(store.currentChapter?.id).toBe('chapter-01');
+    expect(store.scenario).toBe('normal');
+    expect(store.operationMode).toBe('cooling');
+    expect(store.scenarioData.scenario).toBe('normal');
+    expect(store.scenarioData.operationMode).toBe('cooling');
+    expect(store.liveHourIndex).toBe(10);
+    expect(store.focus).toBe('overview');
+    expect(store.selectedNodeId).toBe('pv');
+    expect(vi.getTimerCount()).toBe(1);
+  });
 });

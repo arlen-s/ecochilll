@@ -84,6 +84,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
   let chapterTotalMs = 0;
   let latestScenarioRequestId = 0;
   let latestPresentationTransitionId = 0;
+  let latestRequestedScenario: ScenarioMode = scenario.value;
+  let latestRequestedOperationMode: OperatingMode = operationMode.value;
 
   const liveSnapshot = computed(() => deriveLiveSnapshot(scenarioData.value, liveHourIndex.value));
   const selectedNode = computed<SystemNodeStatus>(
@@ -256,8 +258,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
   };
 
   const refreshScenarioData = async (
-    nextScenario = scenario.value,
-    nextOperationMode = operationMode.value,
+    nextScenario = latestRequestedScenario,
+    nextOperationMode = latestRequestedOperationMode,
   ): Promise<boolean> => {
     const requestId = ++latestScenarioRequestId;
     loading.value = true;
@@ -300,6 +302,11 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   };
 
+  const invalidateScenarioRequests = () => {
+    latestScenarioRequestId += 1;
+    loading.value = false;
+  };
+
   const initialize = async () => {
     loading.value = true;
 
@@ -318,15 +325,17 @@ export const useDashboardStore = defineStore('dashboard', () => {
       loading.value = false;
     }
 
-    await refreshScenarioData(scenario.value, operationMode.value);
+    await refreshScenarioData(latestRequestedScenario, latestRequestedOperationMode);
   };
 
   const setScenario = async (mode: ScenarioMode) => {
-    await refreshScenarioData(mode, operationMode.value);
+    latestRequestedScenario = mode;
+    await refreshScenarioData(latestRequestedScenario, latestRequestedOperationMode);
   };
 
   const setOperationMode = async (mode: OperatingMode) => {
-    await refreshScenarioData(scenario.value, mode);
+    latestRequestedOperationMode = mode;
+    await refreshScenarioData(latestRequestedScenario, latestRequestedOperationMode);
   };
 
   const setFocus = (nextFocus: FocusView) => {
@@ -359,6 +368,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const goToChapter = async (index: number) => {
     const transitionId = ++latestPresentationTransitionId;
     clearPresentationTimer();
+    invalidateScenarioRequests();
     const chapter = presentationChapters.value[index];
 
     if (!chapter) {
@@ -371,6 +381,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
       return;
     }
 
+    latestRequestedScenario = chapter.scenario;
+    latestRequestedOperationMode = chapter.operationMode;
     const scenarioChanged = scenario.value !== chapter.scenario;
     const operationModeChanged = operationMode.value !== chapter.operationMode;
     let dataApplied = true;
@@ -402,6 +414,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     const nextIndex = presentationActive.value ? currentChapterIndex.value + 1 : currentChapterIndex.value;
     if (nextIndex >= presentationChapters.value.length) {
       latestPresentationTransitionId += 1;
+      invalidateScenarioRequests();
       presentationActive.value = false;
       presentationPaused.value = false;
       presentationProgressPct.value = 100;
