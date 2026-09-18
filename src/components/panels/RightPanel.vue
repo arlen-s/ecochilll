@@ -4,7 +4,7 @@
       <div class="headline">
         <div>
           <small>当前运行状态</small>
-          <strong>{{ live.airConditioning.runningStatus }}</strong>
+          <strong>{{ displayStatus(live.airConditioning.runningStatus) }}</strong>
         </div>
         <div class="comfort-pill">舒适度 {{ live.airConditioning.comfortPct.toFixed(0) }}%</div>
       </div>
@@ -13,11 +13,11 @@
         <article v-for="zone in live.airConditioning.zones" :key="zone.id">
           <header>
             <h4>{{ zone.name }}</h4>
-            <span>{{ zone.loadKw }} kW</span>
+            <span>{{ zone.loadKwTh.toFixed(1) }} kWth</span>
           </header>
           <div class="zone-meta">
             <span>{{ zone.indoorTempC.toFixed(1) }}℃ / {{ zone.humidityPct.toFixed(0) }}%</span>
-            <span>{{ zone.status }}</span>
+            <span>{{ displayStatus(zone.status) }}</span>
             <span>舒适 {{ zone.comfortPct.toFixed(0) }}%</span>
           </div>
         </article>
@@ -27,6 +27,8 @@
         <LoadTrendChart />
       </div>
     </SectionCard>
+
+    <ThermalStoragePanel />
 
     <div class="right-panel__focusable">
       <AiDecisionPanel />
@@ -39,10 +41,19 @@ import { computed } from 'vue';
 import LoadTrendChart from '@/components/charts/LoadTrendChart.vue';
 import SectionCard from '@/components/layout/SectionCard.vue';
 import AiDecisionPanel from '@/components/panels/AiDecisionPanel.vue';
+import ThermalStoragePanel from '@/components/panels/ThermalStoragePanel.vue';
 import { useDashboardStore } from '@/store/dashboard';
+import type { AirConditionStatus } from '@/types/energy';
 
 const store = useDashboardStore();
 const live = computed(() => store.liveSnapshot);
+
+const displayStatus = (status: AirConditionStatus) => {
+  if (store.operationMode !== 'heating') return status;
+  if (status === '制冷增强') return '供热增强';
+  if (status === '常规制冷') return '常规供热';
+  return status;
+};
 </script>
 
 <style scoped lang="scss">
@@ -122,9 +133,8 @@ const live = computed(() => store.liveSnapshot);
 }
 
 .right-panel {
-  height: 100%;
   min-height: 0;
-  grid-template-rows: repeat(2, minmax(0, auto));
+  grid-template-rows: repeat(3, auto);
 }
 
 .right-panel > * {

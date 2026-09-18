@@ -12,12 +12,17 @@ import { useDashboardStore } from '@/store/dashboard';
 const store = useDashboardStore();
 
 const option = computed<DashboardChartOption>(() => {
+  const isCooling = store.operationMode === 'cooling';
   const currentHour = store.scenarioData.hourly[store.liveHourIndex].hour;
-  const loadName = store.operationMode === 'cooling' ? '制冷负荷' : '供热负荷';
 
   return {
     grid: commonGrid,
     tooltip: tooltipTheme,
+    legend: {
+      top: 0,
+      right: 10,
+      textStyle: { color: 'rgba(219,239,255,0.64)' },
+    },
     xAxis: {
       type: 'category' as const,
       data: store.scenarioData.hourly.map((item) => item.hour),
@@ -31,7 +36,7 @@ const option = computed<DashboardChartOption>(() => {
     series: [
       {
         ...lineSeries(
-          loadName,
+          isCooling ? '制冷负荷' : '供热负荷',
           '#46b3ff',
           store.scenarioData.hourly.map((item) => item.thermalLoadKwTh),
         ),
@@ -42,6 +47,16 @@ const option = computed<DashboardChartOption>(() => {
           data: [{ xAxis: currentHour }],
         },
       },
+      lineSeries(
+        isCooling ? '机组直供冷量' : '机组直供热量',
+        '#c68cff',
+        store.scenarioData.hourly.map((item) => item.plantDirectThermalKwTh),
+      ),
+      lineSeries(
+        isCooling ? '水罐放冷' : '水罐放热',
+        '#15f5ba',
+        store.scenarioData.hourly.map((item) => item.storageDischargeKwTh),
+      ),
     ],
   };
 });

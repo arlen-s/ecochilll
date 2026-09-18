@@ -48,7 +48,7 @@ const option = computed<DashboardChartOption>(() => ({
       data: store.scenarioData.weekly.map((item) => item.carbonReductionKg),
     },
     {
-      name: '节能率',
+      name: '峰值削减率',
       type: 'line' as const,
       smooth: true,
       yAxisIndex: 1,
@@ -68,7 +68,7 @@ const option = computed<DashboardChartOption>(() => ({
           ],
         },
       },
-      data: store.scenarioData.weekly.map((item) => item.savingRatePct),
+      data: store.scenarioData.weekly.map((item) => item.peakReductionPct),
     },
   ],
 }));

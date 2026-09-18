@@ -40,10 +40,27 @@
     </div>
 
     <div class="top-header__scenes">
+      <div class="season-control" role="group" aria-label="切换水蓄能季节模式" :aria-busy="store.loading">
+        <button
+          v-for="item in operationModes"
+          :key="item.value"
+          type="button"
+          :class="['season-control__button', { 'season-control__button--active': item.value === store.operationMode }]"
+          :aria-pressed="item.value === store.operationMode"
+          :disabled="store.loading"
+          @click="store.setOperationMode(item.value)"
+        >
+          <span>{{ item.season }}</span>
+          <small>{{ item.storage }}</small>
+        </button>
+      </div>
+
       <button
         v-for="item in scenarios"
         :key="item.value"
+        type="button"
         :class="['scene-chip', { 'scene-chip--active': item.value === store.scenario }]"
+        :disabled="store.loading"
         @click="store.setScenario(item.value)"
       >
         {{ item.label }}
@@ -56,7 +73,7 @@
 import { computed } from 'vue';
 import AnimatedNumber from '@/components/common/AnimatedNumber.vue';
 import { useDashboardStore } from '@/store/dashboard';
-import type { ScenarioMode } from '@/types/energy';
+import type { OperatingMode, ScenarioMode } from '@/types/energy';
 
 const store = useDashboardStore();
 
@@ -65,6 +82,11 @@ const scenarios: Array<{ label: string; value: ScenarioMode }> = [
   { label: '高温模式', value: 'heatwave' },
   { label: '云遮挡模式', value: 'cloudy' },
   { label: '高峰电价', value: 'peakPricing' },
+];
+
+const operationModes: Array<{ season: string; storage: string; value: OperatingMode }> = [
+  { season: '制冷季', storage: '水蓄冷', value: 'cooling' },
+  { season: '供热季', storage: '水蓄热', value: 'heating' },
 ];
 
 const dateText = computed(() =>
@@ -95,7 +117,7 @@ const runtimeLabel = computed(() =>
 
 const kpis = computed(() => [
   { label: '当前总功率', value: store.liveSnapshot.coreKpi.totalPowerKw, suffix: ' kW', digits: 0, prefix: '' },
-  { label: '今日节能率', value: store.liveSnapshot.coreKpi.savingRatePct, suffix: ' %', digits: 1, prefix: '' },
+  { label: '峰值削减率', value: store.liveSnapshot.coreKpi.peakReductionPct, suffix: ' %', digits: 1, prefix: '' },
   { label: '碳减排', value: store.liveSnapshot.coreKpi.carbonReductionKg, suffix: ' kg', digits: 0, prefix: '' },
   { label: '经济收益', value: store.liveSnapshot.coreKpi.economicGainCny, suffix: '', digits: 0, prefix: '¥' },
 ]);
@@ -221,6 +243,55 @@ const kpis = computed(() => [
   align-items: center;
 }
 
+.season-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 3px;
+  border: 1px solid rgba(61, 225, 255, 0.16);
+  border-radius: 14px;
+  background: rgba(4, 12, 24, 0.52);
+}
+
+.season-control__button {
+  min-width: 74px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(230, 247, 255, 0.62);
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.season-control__button span,
+.season-control__button small {
+  display: block;
+}
+
+.season-control__button span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.season-control__button small {
+  margin-top: 2px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.season-control__button:hover:not(:disabled),
+.season-control__button--active {
+  background: rgba(21, 245, 186, 0.12);
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(21, 245, 186, 0.3);
+}
+
+.season-control__button:focus-visible,
+.scene-chip:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
 .scene-chip {
   height: 38px;
   padding: 0 14px;
@@ -237,6 +308,12 @@ const kpis = computed(() => [
   border-color: rgba(21, 245, 186, 0.5);
   color: #ffffff;
   box-shadow: 0 0 18px rgba(21, 245, 186, 0.18);
+}
+
+.scene-chip:disabled,
+.season-control__button:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 @media (max-width: 1500px) {
@@ -302,6 +379,10 @@ const kpis = computed(() => [
   .scene-chip {
     width: 100%;
     justify-content: center;
+  }
+
+  .season-control {
+    width: 100%;
   }
 }
 </style>

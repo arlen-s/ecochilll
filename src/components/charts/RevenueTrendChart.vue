@@ -37,7 +37,7 @@ const option = computed<DashboardChartOption>(() => {
     series: [
       {
         type: 'bar',
-        name: '调度收益',
+        name: '移峰节费',
         barWidth: 12,
         itemStyle: {
           color: '#15f5ba',

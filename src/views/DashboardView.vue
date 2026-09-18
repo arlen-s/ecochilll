@@ -9,6 +9,8 @@
       <RightPanel class="dashboard-main__right" />
     </section>
 
+    <BottomPanel />
+
     <EquipmentDetailModal />
   </main>
 </template>
@@ -18,6 +20,7 @@ import { onBeforeUnmount, onMounted } from 'vue';
 import DashboardCommandBar from '@/components/presentation/DashboardCommandBar.vue';
 import TopHeader from '@/components/layout/TopHeader.vue';
 import EquipmentDetailModal from '@/components/panels/EquipmentDetailModal.vue';
+import BottomPanel from '@/components/panels/BottomPanel.vue';
 import LeftPanel from '@/components/panels/LeftPanel.vue';
 import RightPanel from '@/components/panels/RightPanel.vue';
 import EnergyTwinScene from '@/components/three/EnergyTwinScene.vue';
@@ -42,7 +45,7 @@ onBeforeUnmount(() => {
   gap: 14px;
   width: 100%;
   min-height: 100vh;
-  padding: 14px;
+  padding: 14px 14px 96px;
 }
 
 .dashboard-main {
@@ -83,7 +86,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1024px) {
   .dashboard-shell {
-    padding: 12px;
+    padding: 12px 12px 88px;
     gap: 12px;
   }
 
@@ -98,7 +101,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 720px) {
   .dashboard-shell {
-    padding: 10px;
+    padding: 10px 10px 82px;
     gap: 10px;
   }
 }
