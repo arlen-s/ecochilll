@@ -1,92 +1,196 @@
 import type {
-  DashboardRuntimeMeta,
-  DataSourceMode,
   AiDecisionOutput,
   AirConditionMetrics,
   AirConditionStatus,
+  DashboardRuntimeMeta,
   DashboardScenarioData,
+  DataSourceMode,
   EconomicMetrics,
-  FocusView,
   EnergyMixItem,
   HourlyPoint,
   LiveDashboardSnapshot,
+  OperatingMode,
   PresentationChapter,
   ScenarioMode,
-  StorageMetrics,
-  StorageState,
   SystemAlert,
   SystemNodeStatus,
+  ThermalStorageMetrics,
+  ThermalStorageState,
   WeatherSnapshot,
   WeeklyStat,
 } from '@/types/energy';
+import {
+  calculateSensibleHeatCapacity,
+  deriveAvailableHours,
+  stepThermalStorage,
+} from '@/domain/thermalStorage';
 import { clamp } from '@/utils/format';
 
-const scenarioMeta: Record<
-  ScenarioMode,
-  {
-    label: string;
-    summary: string;
-    pvFactor: number;
-    loadFactor: number;
-    priceFactor: number;
-    cloud: number;
-    ambientBias: number;
-    storageBias: number;
-    comfortBias: number;
-    savingBias: number;
-  }
-> = {
+interface ThermalStorageConfig {
+  tankVolumeM3: number;
+  supplyTempC: number;
+  returnTempC: number;
+  plantCop: number;
+  maxChargePowerKwTh: number;
+  maxDischargePowerKwTh: number;
+}
+
+interface ScenarioMeta {
+  label: string;
+  summary: string;
+  pvFactor: number;
+  loadFactor: number;
+  priceFactor: number;
+  cloud: number;
+  ambientBias: number;
+  storageTargetPct: number;
+  comfortBias: number;
+  savingBias: number;
+}
+
+const THERMAL_STORAGE_CONFIG: Record<OperatingMode, ThermalStorageConfig> = {
+  cooling: {
+    tankVolumeM3: 180,
+    supplyTempC: 6,
+    returnTempC: 13,
+    plantCop: 5.2,
+    maxChargePowerKwTh: 180,
+    maxDischargePowerKwTh: 220,
+  },
+  heating: {
+    tankVolumeM3: 180,
+    supplyTempC: 45,
+    returnTempC: 35,
+    plantCop: 3.4,
+    maxChargePowerKwTh: 210,
+    maxDischargePowerKwTh: 240,
+  },
+};
+
+// Hourly tank assumptions. The loss is fractional: 0.001 means 0.1% per hour.
+const CHARGE_EFFICIENCY = 0.94;
+const DISCHARGE_EFFICIENCY = 0.92;
+const STANDING_LOSS_PCT_PER_HOUR = 0.001;
+const STEP_DURATION_HOURS = 1;
+const INITIAL_STORAGE_LEVEL = 0.32;
+const GRID_EMISSION_FACTOR_KG_PER_KWH = 0.62;
+
+const electricalPeakHours = new Set([10, 11, 14, 15, 16, 18, 19, 20]);
+
+const baseScenarioMeta: Record<ScenarioMode, Omit<ScenarioMeta, 'label' | 'summary' | 'ambientBias'>> = {
   normal: {
-    label: '正常模式',
-    summary: '光伏、空调与储能按常规工况协同运行，优先保障舒适度与基础节能收益。',
     pvFactor: 1,
     loadFactor: 1,
     priceFactor: 1,
     cloud: 0.2,
-    ambientBias: 0,
-    storageBias: 0,
+    storageTargetPct: 85,
     comfortBias: 0,
     savingBias: 0,
   },
   heatwave: {
-    label: '高温模式',
-    summary: '午后高温推升冷站负荷，AI 通过预冷与分区控温稳住关键区域舒适度，并兼顾削峰收益。',
     pvFactor: 1.08,
-    loadFactor: 1.24,
+    loadFactor: 1.2,
     priceFactor: 1.05,
     cloud: 0.16,
-    ambientBias: 6,
-    storageBias: 0.15,
+    storageTargetPct: 88,
     comfortBias: -2,
     savingBias: 0,
   },
   cloudy: {
-    label: '云层遮挡模式',
-    summary: '午后云层遮挡导致光伏出力骤降，系统秒级切换到“储能放电 + 电网补能”以托底关键负荷。',
     pvFactor: 0.58,
     loadFactor: 1,
     priceFactor: 1,
     cloud: 0.72,
-    ambientBias: 0,
-    storageBias: 0.12,
+    storageTargetPct: 82,
     comfortBias: -3,
     savingBias: -0.8,
   },
   peakPricing: {
-    label: '高峰电价模式',
-    summary: '分时电价高峰区段强化储能放电，并对低优先级区域小幅让渡舒适度，以换取更高经济收益。',
     pvFactor: 0.96,
     loadFactor: 1.04,
     priceFactor: 1.36,
     cloud: 0.28,
-    ambientBias: 1,
-    storageBias: 0.28,
+    storageTargetPct: 90,
     comfortBias: -4.5,
     savingBias: 2.4,
   },
 };
 
-const peakHours = new Set([10, 11, 14, 15, 16, 18, 19, 20]);
+const getScenarioMeta = (scenario: ScenarioMode, operationMode: OperatingMode): ScenarioMeta => {
+  const shared = baseScenarioMeta[scenario];
+
+  if (operationMode === 'heating') {
+    const modeCopy: Record<ScenarioMode, Pick<ScenarioMeta, 'label' | 'summary' | 'ambientBias'>> = {
+      normal: {
+        label: '常规供热模式',
+        summary: '光伏、热泵与蓄热水罐按常规冬季工况协同运行，兼顾室温与基础节能收益。',
+        ambientBias: 0,
+      },
+      heatwave: {
+        label: '寒潮模式',
+        summary: '寒潮推升供热负荷，AI 提前充热并在用热高峰放热，保障关键区域室温稳定。',
+        ambientBias: -8,
+      },
+      cloudy: {
+        label: '冬季云层遮挡模式',
+        summary: '厚云削弱光伏出力，蓄热水罐通过放热降低热泵电耗，电网负责剩余电力缺口。',
+        ambientBias: -2,
+      },
+      peakPricing: {
+        label: '供热高峰电价模式',
+        summary: '高价窗口优先调用可用热量，减少热泵峰时用电并维持供热舒适度。',
+        ambientBias: -1,
+      },
+    };
+
+    return { ...shared, ...modeCopy[scenario] };
+  }
+
+  const modeCopy: Record<ScenarioMode, Pick<ScenarioMeta, 'label' | 'summary' | 'ambientBias'>> = {
+    normal: {
+      label: '正常制冷模式',
+      summary: '光伏、冷站与蓄冷水罐按常规工况协同运行，优先保障舒适度与基础节能收益。',
+      ambientBias: 0,
+    },
+    heatwave: {
+      label: '高温模式',
+      summary: '午后高温推升供冷负荷，AI 提前充冷并在高温高峰放冷，稳住关键区域舒适度。',
+      ambientBias: 7,
+    },
+    cloudy: {
+      label: '云层遮挡模式',
+      summary: '午后云层遮挡导致光伏骤降，蓄冷水罐通过放冷降低冷站电耗，电网负责剩余电力缺口。',
+      ambientBias: 0,
+    },
+    peakPricing: {
+      label: '制冷高峰电价模式',
+      summary: '高价窗口优先调用可用冷量，减少冷站峰时用电并兼顾室内舒适度。',
+      ambientBias: 1,
+    },
+  };
+
+  return { ...shared, ...modeCopy[scenario] };
+};
+
+const getModeTerms = (operationMode: OperatingMode) => operationMode === 'cooling'
+  ? {
+      charge: '充冷',
+      discharge: '放冷',
+      available: '可用冷量',
+      plant: '冷站',
+      demand: '供冷',
+      medium: '冷水',
+    }
+  : {
+      charge: '充热',
+      discharge: '放热',
+      available: '可用热量',
+      plant: '热泵站',
+      demand: '供热',
+      medium: '热水',
+    };
+
+const hourLabel = (hour: number) => `${hour.toString().padStart(2, '0')}:00`;
 
 const getPrice = (hour: number, factor: number) => {
   if (hour <= 6) return 0.42 * factor;
@@ -95,21 +199,6 @@ const getPrice = (hour: number, factor: number) => {
   if (hour <= 21) return 1.15 * factor;
   return 0.61 * factor;
 };
-
-const getStatusByLoad = (loadKw: number): AirConditionStatus => {
-  if (loadKw >= 350) return '制冷增强';
-  if (loadKw >= 260) return '常规制冷';
-  if (loadKw >= 160) return '节能模式';
-  return '待机巡检';
-};
-
-const getStorageState = (chargeKw: number, dischargeKw: number): StorageState => {
-  if (chargeKw > dischargeKw && chargeKw > 12) return '充电中';
-  if (dischargeKw > chargeKw && dischargeKw > 12) return '放电中';
-  return '待机均衡';
-};
-
-const hourLabel = (hour: number) => `${hour.toString().padStart(2, '0')}:00`;
 
 const getCloudOcclusionFactor = (scenario: ScenarioMode, hour: number) => {
   if (scenario !== 'cloudy') return 1;
@@ -127,450 +216,531 @@ const getCloudOcclusionFactor = (scenario: ScenarioMode, hour: number) => {
   return occlusionProfile[hour] ?? 1;
 };
 
-const getStorageDispatchBoost = (scenario: ScenarioMode, hour: number) => {
-  if (scenario === 'cloudy' && hour >= 13 && hour <= 16) return 26;
-  if (scenario === 'peakPricing' && hour >= 18 && hour <= 20) return 18;
-  return 0;
+const getAmbientTemperature = (
+  operationMode: OperatingMode,
+  hour: number,
+  meta: ScenarioMeta,
+) => {
+  if (operationMode === 'heating') {
+    return Number((8 + Math.cos(((hour - 14) / 24) * Math.PI * 2) * 3 + meta.ambientBias).toFixed(1));
+  }
+
+  return Number((23 + Math.sin(((hour - 7) / 12) * Math.PI) * 8 + meta.ambientBias).toFixed(1));
 };
 
-const getPhotovoltaicEfficiencyPct = (panelTempC: number, meta: (typeof scenarioMeta)[ScenarioMode]) =>
-  clamp(21 + meta.pvFactor * 0.4 - meta.cloud * 1 - Math.max(panelTempC - 25, 0) * 0.045, 17.5, 20.8);
+const getOccupancyCurve = (hour: number) =>
+  hour >= 7 && hour <= 21
+    ? 0.72 + Math.sin(((hour - 7) / 14) * Math.PI) * 0.24
+    : 0.32;
 
-export const buildHourlySeries = (scenario: ScenarioMode): HourlyPoint[] => {
-  const meta = scenarioMeta[scenario];
+const getThermalLoad = (
+  operationMode: OperatingMode,
+  hour: number,
+  ambientTempC: number,
+  meta: ScenarioMeta,
+) => {
+  const occupancy = getOccupancyCurve(hour);
+  if (operationMode === 'heating') {
+    const morningBoost = hour >= 6 && hour <= 9 ? 42 : 0;
+    return (170 + occupancy * 105 + Math.max(18 - ambientTempC, 0) * 18 + morningBoost) * meta.loadFactor;
+  }
+
+  const afternoonBoost = hour >= 11 && hour <= 18 ? 36 : 0;
+  return (185 + occupancy * 112 + Math.max(ambientTempC - 24, 0) * 17 + afternoonBoost) * meta.loadFactor;
+};
+
+const getBaseElectricLoad = (hour: number, meta: ScenarioMeta) => {
+  const occupancy = getOccupancyCurve(hour);
+  return (68 + occupancy * 74) * (0.96 + (meta.loadFactor - 1) * 0.24);
+};
+
+const isDischargeWindow = (
+  scenario: ScenarioMode,
+  operationMode: OperatingMode,
+  hour: number,
+) => {
+  if (scenario === 'cloudy' && hour >= 13 && hour <= 16) return true;
+  if (scenario === 'peakPricing' && hour >= 18 && hour <= 21) return true;
+  if (scenario === 'heatwave') {
+    return operationMode === 'cooling'
+      ? hour >= 14 && hour <= 20
+      : (hour >= 6 && hour <= 9) || (hour >= 17 && hour <= 21);
+  }
+  return electricalPeakHours.has(hour);
+};
+
+const getStatusByLoad = (loadKwTh: number): AirConditionStatus => {
+  if (loadKwTh >= 500) return '制冷增强';
+  if (loadKwTh >= 360) return '常规制冷';
+  if (loadKwTh >= 220) return '节能模式';
+  return '待机巡检';
+};
+
+const getStorageState = (chargeKwTh: number, dischargeKwTh: number): ThermalStorageState => {
+  if (chargeKwTh > 0) return 'charging';
+  if (dischargeKwTh > 0) return 'discharging';
+  return 'standby';
+};
+
+const getStorageStateLabel = (
+  operationMode: OperatingMode,
+  chargeKwTh: number,
+  dischargeKwTh: number,
+) => {
+  const terms = getModeTerms(operationMode);
+  if (chargeKwTh > 0) return `${terms.charge}运行`;
+  if (dischargeKwTh > 0) return `${terms.discharge}削峰`;
+  return '水力待机';
+};
+
+const getPhotovoltaicEfficiencyPct = (panelTempC: number, meta: ScenarioMeta) =>
+  clamp(21 + meta.pvFactor * 0.4 - meta.cloud - Math.max(panelTempC - 25, 0) * 0.045, 17.5, 20.8);
+
+const calculatePointPeakReductionPct = (point: HourlyPoint, plantCop: number) => {
+  const noStoragePlantElectricKw = point.thermalLoadKwTh / plantCop;
+  if (noStoragePlantElectricKw === 0) return 0;
+  return clamp(
+    (noStoragePlantElectricKw - point.plantElectricPowerKw) / noStoragePlantElectricKw * 100,
+    0,
+    100,
+  );
+};
+
+export const buildHourlySeries = (
+  scenario: ScenarioMode,
+  operationMode: OperatingMode,
+): HourlyPoint[] => {
+  const meta = getScenarioMeta(scenario, operationMode);
+  const config = THERMAL_STORAGE_CONFIG[operationMode];
+  const capacityKwhTh = calculateSensibleHeatCapacity(
+    config.tankVolumeM3,
+    Math.abs(config.returnTempC - config.supplyTempC),
+  );
+  const targetStoredEnergyKwhTh = capacityKwhTh * meta.storageTargetPct / 100;
+  let storedEnergyKwhTh = capacityKwhTh * INITIAL_STORAGE_LEVEL;
 
   return Array.from({ length: 24 }, (_, hour) => {
     const solarCurve = Math.max(0, Math.sin(((hour - 6) / 12) * Math.PI));
     const occlusionFactor = getCloudOcclusionFactor(scenario, hour);
-    const pv = Math.round((solarCurve ** 1.5) * 620 * meta.pvFactor * occlusionFactor);
-    const occupancyCurve = hour >= 7 && hour <= 21 ? 0.72 + Math.sin(((hour - 7) / 14) * Math.PI) * 0.24 : 0.32;
-    const coolingCurve = hour >= 11 && hour <= 18 ? 1 + Math.sin(((hour - 11) / 7) * Math.PI) * 0.32 : 0.78;
-    const load = Math.round((145 + occupancyCurve * 120 + coolingCurve * 90 + meta.ambientBias * 4) * meta.loadFactor);
-    const price = Number(getPrice(hour, meta.priceFactor).toFixed(2));
-    const strategicDischarge =
-      (peakHours.has(hour) ? 42 + meta.storageBias * 48 : 18 + meta.storageBias * 12) + getStorageDispatchBoost(scenario, hour);
-    const storageChargeKw = pv > load ? Math.round((pv - load) * 0.45) : hour <= 6 ? 28 : 0;
-    const storageDischargeKw = pv < load ? Math.round(Math.min(load - pv, strategicDischarge)) : hour >= 18 ? 36 : 12;
-    const gridImportKw = Math.max(0, Math.round(load + storageChargeKw - pv - storageDischargeKw));
-    const carbonReductionKg = Number((pv * 0.62 + storageDischargeKw * 0.18).toFixed(1));
-    const savingCny = Number(((pv * 0.42 + storageDischargeKw * price * 0.55) / 1.6).toFixed(1));
-    const irradianceWm2 = Math.round(920 * solarCurve * meta.pvFactor * occlusionFactor);
-    const ambientTempC = Number(
-      (23 + Math.sin(((hour - 7) / 12) * Math.PI) * 8 + meta.ambientBias + (scenario === 'heatwave' ? 2.4 : 0)).toFixed(1),
-    );
+    const photovoltaicKw = Math.round((solarCurve ** 1.5) * 620 * meta.pvFactor * occlusionFactor);
+    const ambientTempC = getAmbientTemperature(operationMode, hour, meta);
+    const thermalLoadKwTh = getThermalLoad(operationMode, hour, ambientTempC, meta);
+    const baseElectricLoadKw = getBaseElectricLoad(hour, meta);
+    const noDispatchPumpElectricPowerKw = 2;
+    const noStoragePlantElectricPowerKw = thermalLoadKwTh / config.plantCop;
+    const noDispatchElectricLoadKw =
+      baseElectricLoadKw + noStoragePlantElectricPowerKw + noDispatchPumpElectricPowerKw;
+    const hasGridStress = photovoltaicKw < noDispatchElectricLoadKw;
+    const wantsDischarge = isDischargeWindow(scenario, operationMode, hour) && hasGridStress;
+    const requestedDischargeKwTh = wantsDischarge
+      ? Math.min(config.maxDischargePowerKwTh, thermalLoadKwTh * (scenario === 'peakPricing' ? 0.46 : 0.38))
+      : 0;
+
+    let requestedChargeKwTh = 0;
+    if (!wantsDischarge && storedEnergyKwhTh < targetStoredEnergyKwhTh) {
+      const roomLimitedChargeKwTh = Math.max(
+        0,
+        (targetStoredEnergyKwhTh - storedEnergyKwhTh) / CHARGE_EFFICIENCY / STEP_DURATION_HOURS,
+      );
+      if (hour <= 6) {
+        const valleyChargeKwTh = operationMode === 'cooling' ? 55 : 65;
+        requestedChargeKwTh = Math.min(config.maxChargePowerKwTh, valleyChargeKwTh, roomLimitedChargeKwTh);
+      } else {
+        const surplusPvKw = Math.max(0, photovoltaicKw - noDispatchElectricLoadKw);
+        const marginalElectricKwPerKwTh = 1 / config.plantCop + 0.018;
+        requestedChargeKwTh = Math.min(
+          config.maxChargePowerKwTh,
+          roomLimitedChargeKwTh,
+          surplusPvKw / marginalElectricKwPerKwTh,
+        );
+      }
+    }
+
+    const storageStep = stepThermalStorage({
+      capacityKwhTh,
+      storedEnergyKwhTh,
+      durationHours: STEP_DURATION_HOURS,
+      chargePowerKwTh: requestedChargeKwTh,
+      dischargePowerKwTh: requestedDischargeKwTh,
+      chargeEfficiency: CHARGE_EFFICIENCY,
+      dischargeEfficiency: DISCHARGE_EFFICIENCY,
+      standingLossPctPerHour: STANDING_LOSS_PCT_PER_HOUR,
+    });
+    storedEnergyKwhTh = storageStep.storedEnergyKwhTh;
+
+    const storageChargeKwTh = storageStep.acceptedChargePowerKwTh;
+    const storageDischargeKwTh = storageStep.deliveredDischargePowerKwTh;
+    const plantDirectThermalKwTh = thermalLoadKwTh - storageDischargeKwTh;
+    const plantElectricPowerKw =
+      (plantDirectThermalKwTh + storageChargeKwTh) / config.plantCop;
+    const pumpElectricPowerKw =
+      2 + (storageChargeKwTh + storageDischargeKwTh) * 0.018;
+    const totalElectricLoadKw =
+      baseElectricLoadKw + plantElectricPowerKw + pumpElectricPowerKw;
+    const electricDifferenceKw = photovoltaicKw - totalElectricLoadKw;
+    const gridImportKw = Math.max(0, -electricDifferenceKw);
+    const gridExportKw = Math.max(0, electricDifferenceKw);
+    const directPvDisplacementKw = Math.min(photovoltaicKw, totalElectricLoadKw);
+    const noStorageGridImportKw = Math.max(0, noDispatchElectricLoadKw - photovoltaicKw);
+    const storageAvoidedGridImportKw = Math.max(0, noStorageGridImportKw - gridImportKw);
+    const priceCny = Number(getPrice(hour, meta.priceFactor).toFixed(2));
 
     return {
       hour: hourLabel(hour),
-      photovoltaicKw: pv,
-      loadKw: load,
-      storageChargeKw,
-      storageDischargeKw,
+      photovoltaicKw,
+      baseElectricLoadKw,
+      plantElectricPowerKw,
+      pumpElectricPowerKw,
+      totalElectricLoadKw,
       gridImportKw,
-      carbonReductionKg,
-      savingCny,
-      priceCny: price,
-      irradianceWm2,
+      gridExportKw,
+      thermalLoadKwTh,
+      plantDirectThermalKwTh,
+      storageChargeKwTh,
+      storageDischargeKwTh,
+      storedEnergyKwhTh,
+      storageLevelPct: storageStep.storageLevelPct,
+      carbonReductionKg: directPvDisplacementKw * GRID_EMISSION_FACTOR_KG_PER_KWH,
+      savingCny: directPvDisplacementKw * priceCny + storageAvoidedGridImportKw * priceCny,
+      priceCny,
+      irradianceWm2: Math.round(920 * solarCurve * meta.pvFactor * occlusionFactor),
       ambientTempC,
     };
   });
 };
 
-const buildWeeklyStats = (scenario: ScenarioMode, hourly: HourlyPoint[]): WeeklyStat[] => {
+const buildWeeklyStats = (
+  scenario: ScenarioMode,
+  operationMode: OperatingMode,
+  hourly: HourlyPoint[],
+): WeeklyStat[] => {
+  const meta = getScenarioMeta(scenario, operationMode);
+  const config = THERMAL_STORAGE_CONFIG[operationMode];
   const basePv = hourly.reduce((sum, item) => sum + item.photovoltaicKw, 0);
-  const baseLoad = hourly.reduce((sum, item) => sum + item.loadKw, 0);
-  const meta = scenarioMeta[scenario];
+  const baseLoad = hourly.reduce((sum, item) => sum + item.totalElectricLoadKw, 0);
+  const peakReductionPct = Math.max(
+    ...hourly.map((item) => calculatePointPeakReductionPct(item, config.plantCop)),
+  );
 
   return Array.from({ length: 7 }, (_, index) => {
     const dayFactor = 0.92 + index * 0.03;
     return {
       date: `04-${(11 + index).toString().padStart(2, '0')}`,
-      pvGenerationKwh: Math.round(basePv * dayFactor * 0.85),
-      loadConsumptionKwh: Math.round(baseLoad * (0.86 + index * 0.02)),
-      savingRatePct: Number((19.4 * meta.pvFactor + index * 0.4 + meta.storageBias * 10).toFixed(1)),
-      carbonReductionKg: Math.round(basePv * 0.45 * dayFactor),
-      benefitCny: Math.round(basePv * 0.36 * dayFactor * meta.priceFactor),
+      pvGenerationKwh: Math.round(basePv * dayFactor),
+      loadConsumptionKwh: Math.round(baseLoad * (0.94 + index * 0.012)),
+      peakReductionPct: Number(clamp(peakReductionPct * (0.94 + index * 0.01), 0, 100).toFixed(1)),
+      carbonReductionKg: Math.round(
+        hourly.reduce((sum, item) => sum + item.carbonReductionKg, 0) * dayFactor,
+      ),
+      benefitCny: Math.round(
+        hourly.reduce((sum, item) => sum + item.savingCny, 0) * dayFactor * meta.priceFactor,
+      ),
     };
   });
 };
 
-const buildAiDecision = (scenario: ScenarioMode, hourly: HourlyPoint[]): AiDecisionOutput => {
-  if (scenario === 'heatwave') {
-    return {
-      title: 'AI 高温削峰联动策略',
-      status: '增强调度中',
-      confidencePct: 94,
-      summary: '预测 14:00-18:00 高温高负荷窗口，优先消纳光伏并在 17:00 后启用储能削峰。',
-      recommendation: '建议图书馆与实验楼设定温度上调 1℃，结合分区控制降低不必要冷量输出。',
-      expectedBenefitCny: 1880,
-      expectedCarbonKg: 362,
-      strategyRules: [
-        {
-          id: 'heat-1',
-          title: '午前预冷蓄能',
-          score: 92,
-          description: '利用 10:00-13:00 的高光伏出力为楼宇预冷，并同时提升电池 SOC。',
-          expectedSavingPct: 14.8,
-          expectedBenefitCny: 560,
-          flow: 'charge',
-        },
-        {
-          id: 'heat-2',
-          title: '傍晚储能削峰',
-          score: 95,
-          description: '在 17:00-20:00 电价高位窗口优先放电，减少峰时购电。',
-          expectedSavingPct: 18.4,
-          expectedBenefitCny: 830,
-          flow: 'discharge',
-        },
-        {
-          id: 'heat-3',
-          title: '舒适度约束优化',
-          score: 86,
-          description: '在舒适度不低于 84% 的前提下，动态下调低人流区送风功率。',
-          expectedSavingPct: 8.6,
-          expectedBenefitCny: 490,
-          flow: 'directSupply',
-        },
-      ],
-      timeline: [
-        { time: '09:00', title: '光伏预测上修', level: 'info', summary: '上午辐照优于昨日均值 7.2%', benefit: '+PV 消纳 9%' },
-        { time: '11:30', title: '预冷任务启动', level: 'medium', summary: '教学楼北区开始提前预冷，减轻午后峰值负荷。', benefit: '削峰 31kW' },
-        { time: '17:10', title: '储能放电接管', level: 'high', summary: '峰段价格触发放电策略，优先保障实验楼与机房。', benefit: '节费 ¥830' },
-      ],
-    };
-  }
-
-  if (scenario === 'cloudy') {
-    return {
-      title: 'AI 云层遮挡应急托底策略',
-      status: '应急调度中',
-      confidencePct: 89,
-      summary: '14:00 云层遮挡使光伏功率骤降至约 100kW，而空调负荷仍维持在 378kW，AI 立即切换储能放电与电网补能。',
-      recommendation: '建议将行政楼和低占用教室切换节能模式，并保留 25% 储能余量应对晚高峰。',
-      expectedBenefitCny: 1180,
-      expectedCarbonKg: 208,
-      strategyRules: [
-        {
-          id: 'cloud-1',
-          title: '储能秒级接管',
-          score: 91,
-          description: '云层遮挡发生后优先释放储能，先托底图书馆与实验楼的连续供冷。',
-          expectedSavingPct: 8.6,
-          expectedBenefitCny: 360,
-          flow: 'discharge',
-        },
-        {
-          id: 'cloud-2',
-          title: '电网柔性补能',
-          score: 86,
-          description: '在储能不足以完全覆盖缺口时快速拉起电网功率，避免关键区域舒适度快速下滑。',
-          expectedSavingPct: 5.8,
-          expectedBenefitCny: 420,
-          flow: 'gridSupport',
-        },
-        {
-          id: 'cloud-3',
-          title: '负荷柔性让渡',
-          score: 83,
-          description: '根据人流热力图下调低占用区域送风功率，让舒适度下降 1-2 分以换取更稳的供需平衡。',
-          expectedSavingPct: 6.9,
-          expectedBenefitCny: 400,
-          flow: 'directSupply',
-        },
-      ],
-      timeline: [
-        { time: '08:20', title: '云层遮挡预警', level: 'info', summary: '天气模型预判午后厚云经过，提前锁定储能安全余量。', benefit: '保留 SOC 25%' },
-        { time: '14:00', title: 'PV 骤降切换', level: 'high', summary: '光伏瞬时跌至约 100kW，系统立即切换为“储能放电 + 电网补能”。', benefit: '托底 378kW 负荷' },
-        { time: '14:10', title: '舒适度柔性让渡', level: 'medium', summary: '行政楼与低占用教室上调设定温度 0.5℃，优先保障图书馆与实验室。', benefit: '舒适度 -2 / 节费 ¥420' },
-      ],
-    };
-  }
-
-  if (scenario === 'peakPricing') {
-    return {
-      title: 'AI 峰谷套利强化策略',
-      status: '收益优先',
-      confidencePct: 96,
-      summary: '基于分时电价强化储能套利，并允许低优先级区域舒适度小幅回落 1-2 分，以换取更高收益。',
-      recommendation: '维持白天 82% 以上 SOC，并在 18:00-21:00 主动释放储能，同时对低占用区域执行温度设定上调 0.5℃。',
-      expectedBenefitCny: 2260,
-      expectedCarbonKg: 335,
-      strategyRules: [
-        {
-          id: 'peak-1',
-          title: '午间充电蓄势',
-          score: 91,
-          description: '利用光伏富余时段叠加谷价补电，锁定晚高峰放电空间。',
-          expectedSavingPct: 12.7,
-          expectedBenefitCny: 650,
-          flow: 'charge',
-        },
-        {
-          id: 'peak-2',
-          title: '高峰削峰放电',
-          score: 98,
-          description: '在 18:00-21:00 释放储能，显著减少高价购电。',
-          expectedSavingPct: 21.3,
-          expectedBenefitCny: 980,
-          flow: 'discharge',
-        },
-        {
-          id: 'peak-3',
-          title: '舒适度换收益',
-          score: 88,
-          description: '对行政楼和低占用区域上调设定温度 0.5℃，以 1-2 分舒适度让渡换取更高削峰收益。',
-          expectedSavingPct: 11.1,
-          expectedBenefitCny: 630,
-          flow: 'gridSupport',
-        },
-      ],
-      timeline: [
-        { time: '10:40', title: 'SOC 拉升完成', level: 'info', summary: '储能 SOC 达到峰前目标值 86%。', benefit: '晚高峰准备完成' },
-        { time: '18:00', title: '峰价防线启动', level: 'high', summary: '储能开始接管 34% 冷站负荷。', benefit: '削峰 68kW' },
-        { time: '20:30', title: '舒适度换收益', level: 'medium', summary: '低优先级区域舒适度回落约 1.6 分，换来更高峰段节费。', benefit: '节费 ¥980' },
-      ],
-    };
-  }
+const buildAiDecision = (
+  scenario: ScenarioMode,
+  operationMode: OperatingMode,
+  hourly: HourlyPoint[],
+): AiDecisionOutput => {
+  const meta = getScenarioMeta(scenario, operationMode);
+  const terms = getModeTerms(operationMode);
+  const totalSaving = hourly.reduce((sum, item) => sum + item.savingCny, 0);
+  const totalCarbon = hourly.reduce((sum, item) => sum + item.carbonReductionKg, 0);
+  const confidenceByScenario: Record<ScenarioMode, number> = {
+    normal: 93,
+    heatwave: 94,
+    cloudy: 89,
+    peakPricing: 96,
+  };
+  const statusByScenario: Record<ScenarioMode, string> = {
+    normal: '平稳运行',
+    heatwave: '负荷保障中',
+    cloudy: '应急调度中',
+    peakPricing: '收益优先',
+  };
 
   return {
-    title: 'AI 常规协同优化策略',
-    status: '平稳运行',
-    confidencePct: 93,
-    summary: '系统按光伏优先、储能跟随、电网托底的规则运行，兼顾舒适度与节能收益。',
-    recommendation: '保持教学楼分区送风策略，并在中午富余光伏时优先补充储能。',
-    expectedBenefitCny: 1560,
-    expectedCarbonKg: 318,
+    title: `AI ${meta.label}${terms.demand}策略`,
+    status: statusByScenario[scenario],
+    confidencePct: confidenceByScenario[scenario],
+    summary: `${terms.plant}、光伏与分层蓄能水罐协同运行；谷段从电网取电${terms.charge}，光伏富余时独立执行绿电${terms.charge}，峰段按${terms.available}决定${terms.discharge}功率。`,
+    recommendation: `${scenario === 'cloudy' ? '云层遮挡期间保留安全余量；' : ''}建议维持关键区域优先级，并根据储能率动态调整${terms.discharge}强度。`,
+    expectedBenefitCny: Math.round(totalSaving),
+    expectedCarbonKg: Math.round(totalCarbon),
     strategyRules: [
       {
-        id: 'normal-1',
-        title: '光伏直供空调',
-        score: 95,
-        description: '中午高辐照时段优先由光伏直接覆盖空调基础负荷。',
-        expectedSavingPct: 15.2,
-        expectedBenefitCny: 520,
-        flow: 'directSupply',
-      },
-      {
-        id: 'normal-2',
-        title: '富余电量充储',
-        score: 88,
-        description: '富余光伏自动转入储能，为晚高峰削峰做准备。',
-        expectedSavingPct: 9.8,
-        expectedBenefitCny: 430,
+        id: `${operationMode}-${scenario}-valley`,
+        title: `谷价电网${terms.charge}`,
+        score: 90,
+        description: `仅在 00:00-06:00 谷价时段由电网驱动${terms.plant}${terms.charge}，并受水罐剩余空间约束。`,
+        expectedSavingPct: 9.2,
+        expectedBenefitCny: Math.round(totalSaving * 0.28),
         flow: 'charge',
       },
       {
-        id: 'normal-3',
-        title: '峰时储能补能',
-        score: 90,
-        description: '当电价抬升且 PV 下降时，由电池补偿空调侧负荷。',
-        expectedSavingPct: 11.4,
-        expectedBenefitCny: 610,
+        id: `${operationMode}-${scenario}-pv`,
+        title: `富余光伏${terms.charge}`,
+        score: 94,
+        description: `光伏覆盖园区实时电负荷后，才用真实电力余量驱动${terms.plant}${terms.charge}。`,
+        expectedSavingPct: 13.6,
+        expectedBenefitCny: Math.round(totalSaving * 0.34),
+        flow: 'charge',
+      },
+      {
+        id: `${operationMode}-${scenario}-peak`,
+        title: `峰时${terms.discharge}削峰`,
+        score: scenario === 'peakPricing' ? 98 : 92,
+        description: `在峰价或负荷压力窗口按${terms.available}执行${terms.discharge}，直接降低${terms.plant}电功率。`,
+        expectedSavingPct: scenario === 'peakPricing' ? 21.3 : 15.4,
+        expectedBenefitCny: Math.round(totalSaving * 0.38),
         flow: 'discharge',
       },
     ],
     timeline: [
-      { time: '09:30', title: '光伏并网稳定', level: 'info', summary: '晨间发电曲线进入上升通道。', benefit: '绿电占比 42%' },
-      { time: '12:50', title: '储能充电完成', level: 'medium', summary: '富余光伏被引导至电池柜。', benefit: 'SOC +18%' },
-      { time: '18:20', title: '晚高峰削峰', level: 'high', summary: '储能承担主要削峰任务，电网功率回落。', benefit: '节费 ¥610' },
+      {
+        time: '05:40',
+        title: `谷价${terms.charge}收尾`,
+        level: 'info',
+        summary: `水罐储能率达到日间运行目标下限，停止额外谷电${terms.charge}。`,
+        benefit: '控制低价补能成本',
+      },
+      {
+        time: '12:40',
+        title: `光伏富余${terms.charge}`,
+        level: 'medium',
+        summary: `光伏覆盖实时电负荷后，剩余电力驱动${terms.plant}向水罐换热。`,
+        benefit: '提升绿电自用率',
+      },
+      {
+        time: scenario === 'cloudy' ? '14:00' : '18:10',
+        title: `${terms.discharge}削峰启动`,
+        level: 'high',
+        summary: `${terms.available}满足调度阈值，水泵启动并通过换热回路承担部分${terms.demand}负荷。`,
+        benefit: `降低${terms.plant}峰时电耗`,
+      },
     ],
   };
 };
 
 const buildEnergyMix = (hourly: HourlyPoint[]): EnergyMixItem[] => {
-  const pv = hourly.reduce((sum, item) => sum + item.photovoltaicKw, 0);
-  const storage = hourly.reduce((sum, item) => sum + item.storageDischargeKw, 0);
-  const grid = hourly.reduce((sum, item) => sum + item.gridImportKw, 0);
+  const photovoltaicSelfUseKwh = hourly.reduce(
+    (sum, item) => sum + Math.min(item.photovoltaicKw, item.totalElectricLoadKw),
+    0,
+  );
+  const gridImportKwh = hourly.reduce((sum, item) => sum + item.gridImportKw, 0);
+  const totalSupplyKwh = photovoltaicSelfUseKwh + gridImportKwh;
+
+  if (totalSupplyKwh === 0) {
+    return [{ name: '园区电负荷', value: 100, color: '#46b3ff' }];
+  }
 
   return [
-    { name: '光伏直供', value: Number(((pv / (pv + storage + grid)) * 100).toFixed(1)), color: '#15f5ba' },
-    { name: '储能调节', value: Number(((storage / (pv + storage + grid)) * 100).toFixed(1)), color: '#46b3ff' },
-    { name: '电网补给', value: Number(((grid / (pv + storage + grid)) * 100).toFixed(1)), color: '#ffd66b' },
+    {
+      name: '光伏自用电量',
+      value: Number((photovoltaicSelfUseKwh / totalSupplyKwh * 100).toFixed(1)),
+      color: '#15f5ba',
+    },
+    {
+      name: '电网购电量',
+      value: Number((gridImportKwh / totalSupplyKwh * 100).toFixed(1)),
+      color: '#ffd66b',
+    },
   ];
 };
 
-const buildNodes = (scenario: ScenarioMode, hourly: HourlyPoint[], photovoltaicEfficiencyPct: number): SystemNodeStatus[] => {
+const buildNodes = (
+  scenario: ScenarioMode,
+  operationMode: OperatingMode,
+  hourly: HourlyPoint[],
+  photovoltaicEfficiencyPct: number,
+): SystemNodeStatus[] => {
   const live = hourly[14];
-  const meta = scenarioMeta[scenario];
+  const meta = getScenarioMeta(scenario, operationMode);
+  const terms = getModeTerms(operationMode);
 
   return [
     {
       id: 'pv',
       label: '屋顶光伏阵列',
       type: 'pv',
-      powerKw: live.photovoltaicKw,
+      powerValue: live.photovoltaicKw,
+      powerUnit: 'kW',
       state: live.photovoltaicKw > 280 ? '高效发电' : '波动发电',
       efficiencyPct: photovoltaicEfficiencyPct,
-      detail: '双层屋顶光伏矩阵，支持辐照联动动态功率演示。',
+      detail: '双层屋顶光伏矩阵，为园区电负荷与热泵机组提供可再生电力。',
     },
     {
       id: 'building-a',
       label: '教学楼 A',
       type: 'building',
-      powerKw: Math.round(live.loadKw * 0.36),
+      powerValue: live.baseElectricLoadKw * 0.36,
+      powerUnit: 'kW',
       state: '教学运行',
       efficiencyPct: 88,
-      detail: '主教学楼，白天人流高峰明显，空调负荷受课表与温度共同影响。',
+      detail: `主教学楼，${terms.demand}需求受课表、室外温度与人员密度共同影响。`,
     },
     {
       id: 'building-b',
       label: '图书馆',
       type: 'building',
-      powerKw: Math.round(live.loadKw * 0.27),
+      powerValue: live.baseElectricLoadKw * 0.27,
+      powerUnit: 'kW',
       state: '阅读高峰',
       efficiencyPct: 90,
-      detail: '图书馆对舒适度更敏感，AI 会优先保障阅览区温度稳定。',
+      detail: `图书馆对舒适度更敏感，AI 优先保障阅览区${terms.demand}稳定。`,
     },
     {
       id: 'building-c',
       label: '实验楼',
       type: 'building',
-      powerKw: Math.round(live.loadKw * 0.22),
+      powerValue: live.baseElectricLoadKw * 0.22,
+      powerUnit: 'kW',
       state: '实验运行',
       efficiencyPct: 87,
-      detail: '实验楼负荷波动较大，是储能削峰的重点保障对象。',
+      detail: `实验楼负荷波动较大，是${terms.discharge}削峰的重点保障对象。`,
     },
     {
       id: 'ac',
-      label: '空调冷站',
+      label: terms.plant,
       type: 'ac',
-      powerKw: live.loadKw,
-      state: getStatusByLoad(live.loadKw),
-      efficiencyPct: clamp(78 + (1 - meta.loadFactor) * 10 + meta.storageBias * 6, 71, 92),
-      detail: '集中冷站联动各楼栋末端设备，支持分区控温与舒适度约束。',
+      powerValue: live.thermalLoadKwTh,
+      powerUnit: 'kWth',
+      state: getStatusByLoad(live.thermalLoadKwTh),
+      efficiencyPct: clamp(84 - (meta.loadFactor - 1) * 18, 72, 92),
+      detail: `${terms.plant}联动楼栋末端与分层水系统，按实时${terms.demand}负荷调节输出。`,
     },
     {
       id: 'storage',
-      label: '储能电池柜',
+      label: '分层蓄能水罐',
       type: 'storage',
-      powerKw: live.storageDischargeKw || live.storageChargeKw,
-      state: live.storageDischargeKw > live.storageChargeKw ? '削峰放电' : '柔性充电',
-      efficiencyPct: clamp(91 + meta.storageBias * 10, 85, 98),
-      detail: '支持峰谷套利与柔性调节，是 AI 调度的重要执行节点。',
+      powerValue: live.storageDischargeKwTh || live.storageChargeKwTh,
+      powerUnit: 'kWth',
+      state: getStorageStateLabel(operationMode, live.storageChargeKwTh, live.storageDischargeKwTh),
+      efficiencyPct: CHARGE_EFFICIENCY * DISCHARGE_EFFICIENCY * 100,
+      detail: `分层${terms.medium}水罐通过变频水泵和板式换热回路完成${terms.charge}、${terms.discharge}与峰荷调节。`,
     },
     {
       id: 'grid',
       label: '园区电网接口',
       type: 'grid',
-      powerKw: live.gridImportKw,
-      state: live.gridImportKw > 120 ? '托底供能' : '低负载接入',
+      powerValue: live.gridImportKw,
+      powerUnit: 'kW',
+      state: live.gridImportKw > 120 ? '托底供电' : live.gridExportKw > 0 ? '余电上网' : '低负载接入',
       efficiencyPct: 100,
-      detail: '接入园区配电网，用于兜底供电与需量侧优化展示。',
+      detail: '接入园区配电网，用于兜底供电、余电上网与需量优化。',
     },
   ];
 };
 
-export const buildScenarioData = (scenario: ScenarioMode): DashboardScenarioData => {
-  const meta = scenarioMeta[scenario];
-  const hourly = buildHourlySeries(scenario);
-  const weekly = buildWeeklyStats(scenario, hourly);
+const buildStorageMetrics = (
+  operationMode: OperatingMode,
+  point: HourlyPoint,
+): ThermalStorageMetrics => {
+  const config = THERMAL_STORAGE_CONFIG[operationMode];
+  const capacityKwhTh = calculateSensibleHeatCapacity(
+    config.tankVolumeM3,
+    Math.abs(config.returnTempC - config.supplyTempC),
+  );
+
+  return {
+    operationMode,
+    state: getStorageState(point.storageChargeKwTh, point.storageDischargeKwTh),
+    capacityKwhTh,
+    storedEnergyKwhTh: point.storedEnergyKwhTh,
+    storageLevelPct: point.storageLevelPct,
+    chargePowerKwTh: point.storageChargeKwTh,
+    dischargePowerKwTh: point.storageDischargeKwTh,
+    tankVolumeM3: config.tankVolumeM3,
+    supplyTempC: config.supplyTempC,
+    returnTempC: config.returnTempC,
+    roundTripEfficiencyPct: CHARGE_EFFICIENCY * DISCHARGE_EFFICIENCY * 100,
+    availableHours: deriveAvailableHours(point.storedEnergyKwhTh, point.thermalLoadKwTh),
+  };
+};
+
+export const buildScenarioData = (
+  scenario: ScenarioMode,
+  operationMode: OperatingMode = 'cooling',
+): DashboardScenarioData => {
+  const meta = getScenarioMeta(scenario, operationMode);
+  const config = THERMAL_STORAGE_CONFIG[operationMode];
+  const hourly = buildHourlySeries(scenario, operationMode);
+  const weekly = buildWeeklyStats(scenario, operationMode, hourly);
   const live = hourly[14];
-  const pvDay = hourly.reduce((sum, item) => sum + item.photovoltaicKw, 0) * 0.72;
+  const pvDay = hourly.reduce((sum, item) => sum + item.photovoltaicKw, 0);
   const savingTotal = hourly.reduce((sum, item) => sum + item.savingCny, 0);
   const carbonTotal = hourly.reduce((sum, item) => sum + item.carbonReductionKg, 0);
-  const storageSoc = clamp(56 + meta.pvFactor * 16 + meta.storageBias * 28, 38, 92);
-  const storageCharge = live.photovoltaicKw > live.loadKw ? live.storageChargeKw : 18;
-  const storageDischarge = peakHours.has(14) || peakHours.has(19) ? live.storageDischargeKw : 22;
-  const panelTempC = Number((41 + meta.ambientBias * 0.8 + meta.pvFactor * 5).toFixed(1));
+  const panelTempC = Number((live.ambientTempC + 13 + meta.pvFactor * 4).toFixed(1));
   const photovoltaicEfficiencyPct = Number(getPhotovoltaicEfficiencyPct(panelTempC, meta).toFixed(1));
+  const energyMix = buildEnergyMix(hourly);
+  const renewableRatioPct = energyMix.find((item) => item.name === '光伏自用电量')?.value ?? 0;
+  const peakReductionPct = calculatePointPeakReductionPct(live, config.plantCop);
 
   const weather: WeatherSnapshot = {
-    weatherText: scenario === 'cloudy' ? '云层遮挡' : scenario === 'heatwave' ? '晴热高温' : '晴间多云',
+    weatherText: scenario === 'cloudy'
+      ? '云层遮挡'
+      : scenario === 'heatwave'
+        ? operationMode === 'cooling' ? '晴热高温' : '寒潮低温'
+        : operationMode === 'cooling' ? '晴间多云' : '冬日晴间多云',
     irradianceWm2: live.irradianceWm2,
     ambientTempC: live.ambientTempC,
-    indoorTempC: Number((24.6 + (scenario === 'heatwave' ? 0.8 : 0) - (scenario === 'cloudy' ? 0.3 : 0)).toFixed(1)),
-    humidityPct: clamp(48 + meta.cloud * 18, 38, 76),
+    indoorTempC: operationMode === 'cooling'
+      ? Number((24.6 + (scenario === 'heatwave' ? 0.7 : 0)).toFixed(1))
+      : Number((21.2 - (scenario === 'heatwave' ? 0.5 : 0)).toFixed(1)),
+    humidityPct: clamp(46 + meta.cloud * 18, 34, 76),
     windSpeedMs: Number((2.8 + meta.cloud * 2.6).toFixed(1)),
-    lightLevelPct: clamp(92 * meta.pvFactor, 48, 96),
-    comfortIndex: clamp(91 - meta.ambientBias * 0.9 + meta.storageBias * 2.4 - meta.cloud * 2.2 + meta.comfortBias, 76, 93),
+    lightLevelPct: clamp(92 * meta.pvFactor, 42, 96),
+    comfortIndex: clamp(91 + meta.comfortBias - meta.cloud * 2.2, 76, 93),
     cloudCoverPct: Math.round(meta.cloud * 100),
   };
 
+  const zoneFractions = [0.34, 0.27, 0.22, 0.17];
+  const zoneNames = ['教学楼 A', '图书馆', '实验楼', '行政楼'];
   const airConditioning: AirConditionMetrics = {
-    totalLoadKw: live.loadKw,
+    thermalLoadKwTh: live.thermalLoadKwTh,
     outdoorTempC: live.ambientTempC,
     indoorAvgTempC: weather.indoorTempC,
     humidityPct: weather.humidityPct,
     comfortPct: weather.comfortIndex,
-    runningStatus: getStatusByLoad(live.loadKw),
-    zones: [
-      {
-        id: 'z1',
-        name: '教学楼 A',
-        loadKw: Math.round(live.loadKw * 0.34),
-        status: getStatusByLoad(live.loadKw * 0.34),
-        indoorTempC: Number((weather.indoorTempC + 0.3).toFixed(1)),
-        targetTempC: scenario === 'heatwave' ? 25.5 : 25,
-        humidityPct: clamp(weather.humidityPct + 3, 42, 75),
-        comfortPct: clamp(weather.comfortIndex - 2, 70, 95),
-        occupancyPct: 82,
-      },
-      {
-        id: 'z2',
-        name: '图书馆',
-        loadKw: Math.round(live.loadKw * 0.27),
-        status: '常规制冷',
-        indoorTempC: Number((weather.indoorTempC - 0.2).toFixed(1)),
-        targetTempC: 24.5,
-        humidityPct: clamp(weather.humidityPct, 40, 72),
-        comfortPct: clamp(weather.comfortIndex + 3, 78, 96),
-        occupancyPct: 74,
-      },
-      {
-        id: 'z3',
-        name: '实验楼',
-        loadKw: Math.round(live.loadKw * 0.22),
-        status: scenario === 'cloudy' ? '节能模式' : '常规制冷',
-        indoorTempC: Number((weather.indoorTempC + 0.1).toFixed(1)),
-        targetTempC: 24.8,
-        humidityPct: clamp(weather.humidityPct - 2, 38, 70),
-        comfortPct: clamp(weather.comfortIndex, 74, 94),
-        occupancyPct: 68,
-      },
-      {
-        id: 'z4',
-        name: '行政楼',
-        loadKw: Math.round(live.loadKw * 0.17),
-        status: scenario === 'cloudy' ? '待机巡检' : '节能模式',
-        indoorTempC: Number((weather.indoorTempC + 0.4).toFixed(1)),
-        targetTempC: 25.8,
-        humidityPct: clamp(weather.humidityPct + 1, 41, 73),
-        comfortPct: clamp(weather.comfortIndex - 4, 68, 90),
-        occupancyPct: 51,
-      },
-    ],
-  };
-
-  const storage: StorageMetrics = {
-    capacityKwh: 980,
-    socPct: Number(storageSoc.toFixed(1)),
-    chargePowerKw: storageCharge,
-    dischargePowerKw: storageDischarge,
-    state: getStorageState(storageCharge, storageDischarge),
-    healthPct: 96.2,
-    cycleCount: 324,
+    runningStatus: getStatusByLoad(live.thermalLoadKwTh),
+    zones: zoneFractions.map((fraction, index) => ({
+      id: `z${index + 1}`,
+      name: zoneNames[index],
+      loadKwTh: live.thermalLoadKwTh * fraction,
+      status: getStatusByLoad(live.thermalLoadKwTh * fraction),
+      indoorTempC: Number((weather.indoorTempC + [0.3, -0.2, 0.1, 0.4][index]).toFixed(1)),
+      targetTempC: operationMode === 'cooling'
+        ? [25, 24.5, 24.8, 25.8][index]
+        : [21, 21.5, 20.5, 20][index],
+      humidityPct: clamp(weather.humidityPct + [3, 0, -2, 1][index], 34, 75),
+      comfortPct: clamp(weather.comfortIndex + [-2, 3, 0, -4][index], 68, 96),
+      occupancyPct: [82, 74, 68, 51][index],
+    })),
   };
 
   const economics: EconomicMetrics = {
     dailySavingCny: Math.round(savingTotal),
     monthlySavingCny: Math.round(savingTotal * 29.4),
-    peakValleyBenefitCny: Math.round(savingTotal * (0.38 + meta.storageBias)),
-    roiTrendPct: Number((12.6 + meta.priceFactor * 2.3 + meta.storageBias * 10).toFixed(1)),
+    peakValleyBenefitCny: Math.round(
+      hourly.reduce((sum, item) => sum + item.storageDischargeKwTh * item.priceCny / config.plantCop, 0),
+    ),
+    roiTrendPct: Number((12.6 + meta.priceFactor * 2.3 + meta.savingBias).toFixed(1)),
     annualForecastCny: Math.round(savingTotal * 365 * 0.84),
   };
 
   return {
     scenario,
+    operationMode,
     scenarioLabel: meta.label,
     scenarioSummary: meta.summary,
     coreKpi: {
-      totalPowerKw: live.loadKw + storageCharge,
-      savingRatePct: Number(
-        (16.2 + meta.pvFactor * 3 + meta.storageBias * 8 + (meta.priceFactor - 1) * 4.6 - meta.cloud * 3 + meta.savingBias).toFixed(1),
-      ),
+      totalPowerKw: live.totalElectricLoadKw,
+      peakReductionPct: Number(peakReductionPct.toFixed(1)),
       carbonReductionKg: Math.round(carbonTotal),
       economicGainCny: economics.dailySavingCny,
-      greenEnergyRatioPct: Number((buildEnergyMix(hourly)[0].value + buildEnergyMix(hourly)[1].value).toFixed(1)),
+      greenEnergyRatioPct: renewableRatioPct,
     },
     weather,
     photovoltaic: {
@@ -582,26 +752,30 @@ export const buildScenarioData = (scenario: ScenarioMode): DashboardScenarioData
       fluctuationPct: Number((4.2 + meta.cloud * 5.8 + (scenario === 'cloudy' ? 7.4 : 0)).toFixed(1)),
     },
     airConditioning,
-    storage,
+    storage: buildStorageMetrics(operationMode, live),
     environment: {
       carbonReductionKg: Math.round(carbonTotal),
       treeEquivalent: Math.round(carbonTotal / 18),
-      renewableRatioPct: Number((buildEnergyMix(hourly)[0].value + buildEnergyMix(hourly)[1].value).toFixed(1)),
+      renewableRatioPct,
       pm25: Math.round(17 + meta.cloud * 15),
       ambientTempC: weather.ambientTempC,
       lightLevelPct: weather.lightLevelPct,
     },
     economics,
-    energyMix: buildEnergyMix(hourly),
+    energyMix,
     hourly,
     weekly,
-    ai: buildAiDecision(scenario, hourly),
-    nodes: buildNodes(scenario, hourly, photovoltaicEfficiencyPct),
+    ai: buildAiDecision(scenario, operationMode, hourly),
+    nodes: buildNodes(scenario, operationMode, hourly, photovoltaicEfficiencyPct),
   };
 };
 
-export const deriveLiveSnapshot = (data: DashboardScenarioData, hourIndex: number): LiveDashboardSnapshot => {
+export const deriveLiveSnapshot = (
+  data: DashboardScenarioData,
+  hourIndex: number,
+): LiveDashboardSnapshot => {
   const point = data.hourly[hourIndex];
+  const config = THERMAL_STORAGE_CONFIG[data.operationMode];
   const pvProgress = data.hourly
     .slice(0, hourIndex + 1)
     .reduce((sum, item) => sum + item.photovoltaicKw, 0);
@@ -611,17 +785,26 @@ export const deriveLiveSnapshot = (data: DashboardScenarioData, hourIndex: numbe
   const carbonProgress = data.hourly
     .slice(0, hourIndex + 1)
     .reduce((sum, item) => sum + item.carbonReductionKg, 0);
-  const storageSoc = clamp(data.storage.socPct + point.storageChargeKw * 0.04 - point.storageDischargeKw * 0.06, 24, 96);
-  const comfort = clamp(data.weather.comfortIndex - (point.loadKw > 320 ? 2.2 : 0) + (point.photovoltaicKw > 280 ? 1.2 : 0), 72, 96);
+  const comfort = clamp(
+    data.weather.comfortIndex - (point.thermalLoadKwTh > 500 ? 2.2 : 0) + (point.photovoltaicKw > 280 ? 1.2 : 0),
+    72,
+    96,
+  );
+  const photovoltaicSharePct = clamp(
+    Math.min(point.photovoltaicKw, point.totalElectricLoadKw) / Math.max(point.totalElectricLoadKw, 1) * 100,
+    0,
+    100,
+  );
 
   return {
     hourLabel: point.hour,
+    operationMode: data.operationMode,
     coreKpi: {
-      totalPowerKw: point.loadKw + point.storageChargeKw,
-      savingRatePct: Number((data.coreKpi.savingRatePct + (point.photovoltaicKw > 300 ? 0.9 : -0.8)).toFixed(1)),
+      totalPowerKw: point.totalElectricLoadKw,
+      peakReductionPct: Number(calculatePointPeakReductionPct(point, config.plantCop).toFixed(1)),
       carbonReductionKg: Math.round(carbonProgress),
       economicGainCny: Math.round(savingProgress),
-      greenEnergyRatioPct: Number((clamp((point.photovoltaicKw + point.storageDischargeKw) / Math.max(point.loadKw, 1) * 100, 38, 98)).toFixed(1)),
+      greenEnergyRatioPct: Number(photovoltaicSharePct.toFixed(1)),
     },
     weather: {
       ...data.weather,
@@ -633,39 +816,41 @@ export const deriveLiveSnapshot = (data: DashboardScenarioData, hourIndex: numbe
       ...data.photovoltaic,
       powerKw: point.photovoltaicKw,
       irradianceWm2: point.irradianceWm2,
-      todayGenerationKwh: Math.round(pvProgress * 0.72),
-      fluctuationPct: Number((data.photovoltaic.fluctuationPct + Math.abs(point.photovoltaicKw - data.photovoltaic.powerKw) * 0.01).toFixed(1)),
+      todayGenerationKwh: Math.round(pvProgress),
+      fluctuationPct: Number(
+        (data.photovoltaic.fluctuationPct + Math.abs(point.photovoltaicKw - data.photovoltaic.powerKw) * 0.01).toFixed(1),
+      ),
     },
     airConditioning: {
       ...data.airConditioning,
-      totalLoadKw: point.loadKw,
+      thermalLoadKwTh: point.thermalLoadKwTh,
       outdoorTempC: point.ambientTempC,
       comfortPct: Number(comfort.toFixed(1)),
-      runningStatus: getStatusByLoad(point.loadKw),
+      runningStatus: getStatusByLoad(point.thermalLoadKwTh),
       zones: data.airConditioning.zones.map((zone, index) => ({
         ...zone,
-        loadKw: Math.round(point.loadKw * [0.34, 0.27, 0.22, 0.17][index]),
-        comfortPct: clamp(zone.comfortPct + (index === 1 ? 2 : -1) + (point.photovoltaicKw > 300 ? 2 : 0), 68, 96),
+        loadKwTh: point.thermalLoadKwTh * [0.34, 0.27, 0.22, 0.17][index],
+        comfortPct: clamp(
+          zone.comfortPct + (index === 1 ? 2 : -1) + (point.photovoltaicKw > 300 ? 2 : 0),
+          68,
+          96,
+        ),
       })),
     },
-    storage: {
-      ...data.storage,
-      socPct: Number(storageSoc.toFixed(1)),
-      chargePowerKw: point.storageChargeKw,
-      dischargePowerKw: point.storageDischargeKw,
-      state: getStorageState(point.storageChargeKw, point.storageDischargeKw),
-    },
+    storage: buildStorageMetrics(data.operationMode, point),
     environment: {
       ...data.environment,
       carbonReductionKg: Math.round(carbonProgress),
       treeEquivalent: Math.round(carbonProgress / 18),
       ambientTempC: point.ambientTempC,
-      lightLevelPct: clamp((point.irradianceWm2 / 9.8), 12, 100),
+      lightLevelPct: clamp(point.irradianceWm2 / 9.8, 12, 100),
     },
     economics: {
       ...data.economics,
       dailySavingCny: Math.round(savingProgress),
-      peakValleyBenefitCny: Math.round(data.economics.peakValleyBenefitCny * (0.78 + point.priceCny / 2)),
+      peakValleyBenefitCny: Math.round(
+        data.economics.peakValleyBenefitCny * (0.78 + point.priceCny / 2),
+      ),
     },
     gridImportKw: point.gridImportKw,
   };
@@ -683,76 +868,77 @@ export const buildSystemAlerts = (
   hourIndex: number,
 ): SystemAlert[] => {
   const alerts: SystemAlert[] = [];
-  const hour = Number.parseInt(data.hourly[hourIndex].hour.slice(0, 2), 10);
+  const point = data.hourly[hourIndex];
+  const hour = Number.parseInt(point.hour.slice(0, 2), 10);
+  const terms = getModeTerms(data.operationMode);
+  const isTemperatureStress = data.operationMode === 'cooling'
+    ? live.weather.ambientTempC >= 34
+    : live.weather.ambientTempC <= 2;
 
-  if (live.weather.ambientTempC >= 34 || data.scenario === 'heatwave') {
+  if (isTemperatureStress || data.scenario === 'heatwave') {
     alerts.push({
-      id: `${data.scenario}-high-temp`,
-      title: '高温负荷预警',
-      summary: '午后高温推升冷站负荷，建议维持预冷与分区控温策略。',
+      id: `${data.operationMode}-${data.scenario}-temperature`,
+      title: data.operationMode === 'cooling' ? '高温负荷预警' : '寒潮负荷预警',
+      summary: `${data.operationMode === 'cooling' ? '高温' : '低温'}推升${terms.demand}负荷，建议维持提前${terms.charge}与分区调节策略。`,
       level: 'high',
       nodeId: 'ac',
       metric: '室外温度',
       value: `${live.weather.ambientTempC.toFixed(1)}℃`,
-      suggestion: '优先保障图书馆与实验楼，普通楼层提升设定点 0.5~1℃。',
+      suggestion: `优先保障图书馆与实验楼，并按${terms.available}安排${terms.discharge}。`,
     });
   }
 
   if (data.scenario === 'cloudy' || live.photovoltaic.powerKw < 160) {
     alerts.push({
-      id: `${data.scenario}-pv-drop`,
-      title: data.scenario === 'cloudy' && hour >= 13 && hour <= 16 ? '云层遮挡导致光伏骤降' : '光伏出力偏低',
-      summary:
-        data.scenario === 'cloudy' && hour >= 13 && hour <= 16
-          ? '午后厚云经过导致光伏瞬时跌落，系统需依靠储能放电与电网补能维持关键负荷。'
-          : '当前辐照不足，系统需提升储能与电网协同供能能力。',
+      id: `${data.operationMode}-${data.scenario}-pv-drop`,
+      title: data.scenario === 'cloudy' && hour >= 13 && hour <= 16
+        ? '云层遮挡导致光伏骤降'
+        : '光伏出力偏低',
+      summary: `当前光伏不足，系统通过${terms.discharge}降低${terms.plant}用电，并由电网补足剩余电力缺口。`,
       level: data.scenario === 'cloudy' ? 'high' : 'medium',
       nodeId: 'pv',
       metric: '光伏功率',
-      value: `${live.photovoltaic.powerKw} kW`,
-      suggestion:
-        data.scenario === 'cloudy' && hour >= 13 && hour <= 16
-          ? '优先保障图书馆与实验楼，行政楼切换节能送风，并预留晚高峰可用 SOC。'
-          : '维持核心负荷优先级，并保留晚高峰可用 SOC。',
+      value: `${live.photovoltaic.powerKw.toFixed(1)} kW`,
+      suggestion: `维持核心负荷优先级，并保留晚高峰所需${terms.available}。`,
     });
   }
 
   if (live.gridImportKw >= 150 || data.scenario === 'peakPricing') {
     alerts.push({
-      id: `${data.scenario}-grid`,
+      id: `${data.operationMode}-${data.scenario}-grid`,
       title: '购电成本敏感',
-      summary: '高价时段网侧购电占比抬升，需强化储能削峰与需量控制。',
+      summary: `高价时段网侧购电抬升，需要用${terms.discharge}降低${terms.plant}电功率。`,
       level: data.scenario === 'peakPricing' ? 'high' : 'medium',
       nodeId: 'grid',
       metric: '网购电功率',
-      value: `${live.gridImportKw} kW`,
-      suggestion: '提升储能放电优先级，避免 18:00-21:00 形成新的功率峰值。',
+      value: `${live.gridImportKw.toFixed(1)} kW`,
+      suggestion: `根据水罐储能率提升${terms.discharge}优先级，避免形成新的购电峰值。`,
     });
   }
 
-  if (live.storage.socPct <= 42 || live.storage.dischargePowerKw >= 42) {
+  if (live.storage.storageLevelPct <= 35 || live.storage.dischargePowerKwTh >= 120) {
     alerts.push({
-      id: `${data.scenario}-storage`,
-      title: '储能策略关注',
-      summary: '储能进入高强度参与区间，需要平衡削峰收益与余量安全。',
-      level: live.storage.socPct <= 42 ? 'high' : 'medium',
+      id: `${data.operationMode}-${data.scenario}-storage`,
+      title: '水罐储能策略关注',
+      summary: `分层水罐进入高强度参与区间，需要平衡削峰收益与${terms.available}安全余量。`,
+      level: live.storage.storageLevelPct <= 35 ? 'high' : 'medium',
       nodeId: 'storage',
-      metric: 'SOC / 放电功率',
-      value: `${live.storage.socPct.toFixed(1)}% / ${live.storage.dischargePowerKw} kW`,
-      suggestion: '保留 25% 以上安全裕量，必要时引入低价补电。',
+      metric: `储能率 / ${terms.discharge}功率`,
+      value: `${live.storage.storageLevelPct.toFixed(1)}% / ${live.storage.dischargePowerKwTh.toFixed(1)} kWth`,
+      suggestion: `保留必要${terms.available}，下一谷价窗口再从电网${terms.charge}。`,
     });
   }
 
   if (hour >= 10 && hour <= 15 && live.photovoltaic.powerKw >= 280) {
     alerts.push({
-      id: `${data.scenario}-pv-window`,
+      id: `${data.operationMode}-${data.scenario}-pv-window`,
       title: '绿电消纳窗口',
-      summary: '当前是高光照窗口，适合优先空调直供并同步补能储电。',
+      summary: `当前光伏先覆盖园区电负荷，真实富余电力可驱动${terms.plant}${terms.charge}。`,
       level: 'info',
       nodeId: 'pv',
       metric: '辐照强度',
       value: `${live.photovoltaic.irradianceWm2} W/m²`,
-      suggestion: '将富余光伏电量优先转入储能，为晚峰段预留削峰能力。',
+      suggestion: `保持水罐剩余空间，为晚峰段${terms.discharge}预留能力。`,
     });
   }
 
@@ -765,74 +951,80 @@ export const buildPresentationScript = (): PresentationChapter[] => [
   {
     id: 'chapter-01',
     title: '开场总览：智慧校园双碳底座',
-    summary: '从园区总览切入，展示光伏、空调、储能与电网的协同关系，建立项目全局认知。',
+    summary: '从园区总览切入，展示光伏、冷站、蓄冷水罐与电网的协同关系。',
     scenario: 'normal',
+    operationMode: 'cooling',
     focus: 'overview',
     nodeId: 'pv',
     hourIndex: 10,
     durationMs: 7000,
-    highlight: '一张大屏同时呈现能源流、设备态和经营价值，适合比赛答辩开场。',
-    benefit: '当前绿电占比稳定提升，系统综合节能进入常态优化区间。',
+    highlight: '一张大屏同时呈现电力流、冷热流、设备状态与经营价值。',
+    benefit: '绿电优先覆盖园区电负荷，水系统负责跨时段转移冷量。',
   },
   {
     id: 'chapter-02',
-    title: '中午消纳：光伏直供空调并富余充储',
-    summary: '切换到光伏视角，强调高辐照窗口下的光伏直供与富余电量充储逻辑。',
+    title: '中午消纳：光伏直供并富余充冷',
+    summary: '强调光伏先覆盖实时电负荷，真实富余电力再驱动冷站向水罐充冷。',
     scenario: 'normal',
+    operationMode: 'cooling',
     focus: 'pv',
     nodeId: 'pv',
     hourIndex: 13,
     durationMs: 7600,
-    highlight: '中午绿电优先覆盖空调基础负荷，剩余电量自动进入储能电池柜。',
-    benefit: '系统在不牺牲舒适度的前提下，提高了绿电消纳率与晚高峰准备度。',
+    highlight: '电力与冷量分开计量，能够清楚解释绿电如何转化为可用冷量。',
+    benefit: '提高光伏自用率，并为晚高峰准备可用冷量。',
   },
   {
     id: 'chapter-03',
-    title: '高温挑战：AI 预冷削峰保舒适',
-    summary: '切换高温模式，展示室外高温导致空调负荷攀升时，AI 如何通过预冷和分区策略稳住舒适度。',
+    title: '高温挑战：AI 充冷放冷保舒适',
+    summary: '切换高温模式，展示供冷负荷攀升时，AI 如何调度冷站、蓄冷水罐与楼栋末端。',
     scenario: 'heatwave',
+    operationMode: 'cooling',
     focus: 'ac',
     nodeId: 'ac',
     hourIndex: 15,
     durationMs: 8200,
-    highlight: 'AI 在高温工况下主动调度冷站与楼栋负荷，不只是展示数据，而是展示决策过程。',
-    benefit: '峰值负荷被提前摊平，舒适度维持在比赛展示可感知的高水位。',
+    highlight: '水罐放冷直接分担热负荷，冷站电耗按 COP 同步下降。',
+    benefit: '峰值电功率下降，同时维持关键区域舒适度。',
   },
   {
     id: 'chapter-04',
-    title: '云层遮挡：PV 骤降触发储能与电网接管',
-    summary: '切换云层遮挡模式，展示光伏骤降至约 100kW、空调负荷仍维持 378kW 时的秒级调度切换。',
+    title: '云层遮挡：放冷降低冷站电耗',
+    summary: '切换云层遮挡模式，展示光伏骤降时水罐放冷、电网补足电力缺口的协同逻辑。',
     scenario: 'cloudy',
+    operationMode: 'cooling',
     focus: 'storage',
     nodeId: 'storage',
     hourIndex: 14,
     durationMs: 7600,
-    highlight: '这一段不再只展示“晴天高发电”，而是直观展示 AI 如何处理供需失衡与关键负荷保障。',
-    benefit: '图书馆与实验楼优先供能，行政楼柔性让渡，完整体现“储能放电 + 电网补能”的调度价值。',
+    highlight: '冷量不被误算成发电，而是通过减少冷站产冷量来降低电负荷。',
+    benefit: '关键楼宇持续供冷，购电峰值受到抑制。',
   },
   {
     id: 'chapter-05',
-    title: '峰价收益：储能削峰放大经济效益',
-    summary: '切换高峰电价模式，展示系统如何以 1-2 分舒适度让渡换取更高节能率与直接经济收益。',
+    title: '峰价收益：水罐放冷削峰',
+    summary: '切换高峰电价模式，展示系统如何调用可用冷量减少高价时段冷站用电。',
     scenario: 'peakPricing',
+    operationMode: 'cooling',
     focus: 'storage',
     nodeId: 'grid',
     hourIndex: 19,
     durationMs: 8400,
-    highlight: '将“舒适度约束优化”明确变成可解释的经营策略，而不是把舒适度和节能率同时拉满。',
-    benefit: '峰价窗口显著减少高价购电，经济收益提升，同时把舒适度变化控制在可接受范围内。',
+    highlight: '削峰率以无蓄能基线冷站电功率为参照，收益口径清晰。',
+    benefit: '减少峰价购电，并将舒适度变化控制在可接受范围内。',
   },
   {
     id: 'chapter-06',
-    title: '总结收束：从单点优化到校园级平台',
-    summary: '回到总览，强调项目可从单楼扩展到整个智慧校园，形成能源管理平台。',
-    scenario: 'peakPricing',
+    title: '冬季扩展：寒潮下的蓄热调度',
+    summary: '以寒潮供热场景收束，展示同一水系统模型如何切换为充热与放热运行。',
+    scenario: 'heatwave',
+    operationMode: 'heating',
     focus: 'overview',
-    nodeId: 'grid',
-    hourIndex: 20,
+    nodeId: 'storage',
+    hourIndex: 18,
     durationMs: 7000,
-    highlight: '当前原型已具备展示价值、逻辑完整度和扩展能力，可演示也可持续开发。',
-    benefit: '项目具备向校园级能源管理、碳资产运营与综合调度平台延展的基础。',
+    highlight: '供冷与供热共用清晰的热量平衡、储能率和水罐边界。',
+    benefit: '平台可覆盖校园全年冷热源优化与碳资产运营。',
   },
 ];
 
