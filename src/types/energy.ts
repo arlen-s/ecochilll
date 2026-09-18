@@ -2,13 +2,14 @@ export type ScenarioMode = 'normal' | 'heatwave' | 'cloudy' | 'peakPricing';
 export type FocusView = 'overview' | 'pv' | 'ac' | 'storage';
 export type FlowDirection = 'charge' | 'discharge' | 'directSupply' | 'gridSupport';
 export type AirConditionStatus = '制冷增强' | '常规制冷' | '节能模式' | '待机巡检';
-export type StorageState = '充电中' | '放电中' | '待机均衡';
+export type OperatingMode = 'cooling' | 'heating';
+export type ThermalStorageState = 'charging' | 'discharging' | 'standby';
 export type AlertLevel = 'high' | 'medium' | 'info';
 export type DataSourceMode = 'mock' | 'api';
 
 export interface CoreKpi {
   totalPowerKw: number;
-  savingRatePct: number;
+  peakReductionPct: number;
   carbonReductionKg: number;
   economicGainCny: number;
   greenEnergyRatioPct: number;
@@ -38,7 +39,7 @@ export interface PhotovoltaicMetrics {
 export interface AirConditionZone {
   id: string;
   name: string;
-  loadKw: number;
+  loadKwTh: number;
   status: AirConditionStatus;
   indoorTempC: number;
   targetTempC: number;
@@ -48,7 +49,7 @@ export interface AirConditionZone {
 }
 
 export interface AirConditionMetrics {
-  totalLoadKw: number;
+  thermalLoadKwTh: number;
   outdoorTempC: number;
   indoorAvgTempC: number;
   humidityPct: number;
@@ -57,14 +58,19 @@ export interface AirConditionMetrics {
   zones: AirConditionZone[];
 }
 
-export interface StorageMetrics {
-  capacityKwh: number;
-  socPct: number;
-  chargePowerKw: number;
-  dischargePowerKw: number;
-  state: StorageState;
-  healthPct: number;
-  cycleCount: number;
+export interface ThermalStorageMetrics {
+  operationMode: OperatingMode;
+  state: ThermalStorageState;
+  capacityKwhTh: number;
+  storedEnergyKwhTh: number;
+  storageLevelPct: number;
+  chargePowerKwTh: number;
+  dischargePowerKwTh: number;
+  tankVolumeM3: number;
+  supplyTempC: number;
+  returnTempC: number;
+  roundTripEfficiencyPct: number;
+  availableHours: number;
 }
 
 export interface EnvironmentImpact {
@@ -93,10 +99,18 @@ export interface EnergyMixItem {
 export interface HourlyPoint {
   hour: string;
   photovoltaicKw: number;
-  loadKw: number;
-  storageChargeKw: number;
-  storageDischargeKw: number;
+  baseElectricLoadKw: number;
+  plantElectricPowerKw: number;
+  pumpElectricPowerKw: number;
+  totalElectricLoadKw: number;
   gridImportKw: number;
+  gridExportKw: number;
+  thermalLoadKwTh: number;
+  plantDirectThermalKwTh: number;
+  storageChargeKwTh: number;
+  storageDischargeKwTh: number;
+  storedEnergyKwhTh: number;
+  storageLevelPct: number;
   carbonReductionKg: number;
   savingCny: number;
   priceCny: number;
@@ -108,7 +122,7 @@ export interface WeeklyStat {
   date: string;
   pvGenerationKwh: number;
   loadConsumptionKwh: number;
-  savingRatePct: number;
+  peakReductionPct: number;
   carbonReductionKg: number;
   benefitCny: number;
 }
@@ -147,7 +161,8 @@ export interface SystemNodeStatus {
   id: string;
   label: string;
   type: 'pv' | 'building' | 'ac' | 'storage' | 'grid';
-  powerKw: number;
+  powerValue: number;
+  powerUnit: 'kW' | 'kWth';
   state: string;
   efficiencyPct: number;
   detail: string;
@@ -169,6 +184,7 @@ export interface PresentationChapter {
   title: string;
   summary: string;
   scenario: ScenarioMode;
+  operationMode: OperatingMode;
   focus: FocusView;
   nodeId: string;
   hourIndex: number;
@@ -209,13 +225,14 @@ export interface NodeDetailData {
 
 export interface DashboardScenarioData {
   scenario: ScenarioMode;
+  operationMode: OperatingMode;
   scenarioLabel: string;
   scenarioSummary: string;
   coreKpi: CoreKpi;
   weather: WeatherSnapshot;
   photovoltaic: PhotovoltaicMetrics;
   airConditioning: AirConditionMetrics;
-  storage: StorageMetrics;
+  storage: ThermalStorageMetrics;
   environment: EnvironmentImpact;
   economics: EconomicMetrics;
   energyMix: EnergyMixItem[];
@@ -227,11 +244,12 @@ export interface DashboardScenarioData {
 
 export interface LiveDashboardSnapshot {
   hourLabel: string;
+  operationMode: OperatingMode;
   coreKpi: CoreKpi;
   weather: WeatherSnapshot;
   photovoltaic: PhotovoltaicMetrics;
   airConditioning: AirConditionMetrics;
-  storage: StorageMetrics;
+  storage: ThermalStorageMetrics;
   environment: EnvironmentImpact;
   economics: EconomicMetrics;
   gridImportKw: number;
