@@ -189,7 +189,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
     const alert = activeAlerts.value.find((item) => item.nodeId === node.id);
     if (alert) return alert.suggestion;
 
-    if (node.type === 'pv') return '保持高光照窗口下的直供优先策略，并同步补能储电。';
+    if (node.type === 'pv') {
+      const thermalEnergy = liveSnapshot.value.operationMode === 'cooling' ? '蓄冷量' : '蓄热量';
+      return `保持高光照窗口下的直供优先策略，并同步补充${thermalEnergy}。`;
+    }
     if (node.type === 'ac') return '根据人流与温度变化动态调整分区送风，兼顾舒适与削峰。';
     if (node.type === 'storage') return getStorageDisplayTerms(liveSnapshot.value.operationMode).recommendation;
     if (node.type === 'grid') return '将电网侧功率维持在可控区间，避免峰段形成新的需量峰值。';

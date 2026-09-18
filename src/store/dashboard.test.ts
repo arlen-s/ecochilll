@@ -27,6 +27,14 @@ describe('dashboard operation mode', () => {
     expect(store.operationMode).toBe('heating');
     expect(store.scenarioData.operationMode).toBe('heating');
     expect(store.scenarioData.storage.operationMode).toBe('heating');
+
+    store.liveHourIndex = 9;
+    store.selectNode('pv');
+    expect(store.selectedNodeDetail.recommendation).toContain('补充蓄热量');
+    expect(store.selectedNodeDetail.recommendation).not.toContain('储电');
+
+    store.liveHourIndex = 14;
+    store.selectNode('storage');
     expect(store.selectedNodeDetail.metrics.map((metric) => metric.label)).toEqual([
       '蓄热水位',
       '可用热量',
