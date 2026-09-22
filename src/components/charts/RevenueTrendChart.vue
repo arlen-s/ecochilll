@@ -37,7 +37,7 @@ const option = computed<DashboardChartOption>(() => {
     series: [
       {
         type: 'bar',
-        name: '调度收益',
+        name: '移峰节费',
         barWidth: 12,
         itemStyle: {
           color: '#15f5ba',
@@ -49,7 +49,7 @@ const option = computed<DashboardChartOption>(() => {
           label: { formatter: '当前回放', color: '#ffd66b' },
           data: [{ xAxis: currentHour }],
         },
-        data: store.scenarioData.hourly.map((item) => item.savingCny),
+        data: store.scenarioData.hourly.map((item) => item.storageBenefitCny),
       },
       {
         type: 'line' as const,

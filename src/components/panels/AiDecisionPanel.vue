@@ -41,7 +41,7 @@
         </div>
         <p>{{ rule.description }}</p>
         <footer>
-          <span>节能 {{ rule.expectedSavingPct.toFixed(1) }}%</span>
+          <span>峰值优化 {{ rule.expectedSavingPct.toFixed(1) }}%</span>
           <span>收益 ¥{{ rule.expectedBenefitCny }}</span>
         </footer>
       </article>

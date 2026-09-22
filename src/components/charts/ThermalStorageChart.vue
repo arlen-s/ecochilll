@@ -12,41 +12,54 @@ import { useDashboardStore } from '@/store/dashboard';
 const store = useDashboardStore();
 
 const option = computed<DashboardChartOption>(() => {
+  const isCooling = store.operationMode === 'cooling';
   const currentHour = store.scenarioData.hourly[store.liveHourIndex].hour;
+  const chargeSeries = lineSeries(
+    isCooling ? '充冷功率' : '充热功率',
+    '#46b3ff',
+    store.scenarioData.hourly.map((item) => item.storageChargeKwTh),
+  );
+  const dischargeSeries = lineSeries(
+    isCooling ? '放冷功率' : '放热功率',
+    '#15f5ba',
+    store.scenarioData.hourly.map((item) => item.storageDischargeKwTh),
+  );
+  const levelSeries = lineSeries(
+    isCooling ? '蓄冷水位' : '蓄热水位',
+    '#ffd66b',
+    store.scenarioData.hourly.map((item) => item.storageLevelPct),
+  );
 
   return {
-    grid: {
-      ...commonGrid,
-      top: 58,
-    },
+    grid: commonGrid,
     tooltip: tooltipTheme,
     legend: {
-      type: 'scroll',
       top: 0,
-      left: 8,
-      right: 8,
+      right: 10,
       textStyle: { color: 'rgba(219,239,255,0.64)' },
-      pageTextStyle: { color: 'rgba(219,239,255,0.64)' },
-      pageIconColor: '#46b3ff',
-      pageIconInactiveColor: 'rgba(219,239,255,0.24)',
     },
     xAxis: {
       type: 'category' as const,
       data: store.scenarioData.hourly.map((item) => item.hour),
       ...commonAxis,
     },
-    yAxis: {
-      type: 'value' as const,
-      name: 'kW',
-      ...commonAxis,
-    },
+    yAxis: [
+      {
+        type: 'value' as const,
+        name: 'kWth',
+        ...commonAxis,
+      },
+      {
+        type: 'value' as const,
+        name: '%',
+        min: 0,
+        max: 100,
+        ...commonAxis,
+      },
+    ],
     series: [
       {
-        ...lineSeries(
-          '光伏发电',
-          '#15f5ba',
-          store.scenarioData.hourly.map((item) => item.photovoltaicKw),
-        ),
+        ...chargeSeries,
         markLine: {
           symbol: 'none',
           lineStyle: { color: '#ffd66b', width: 1.4, type: 'dashed' as const },
@@ -54,21 +67,12 @@ const option = computed<DashboardChartOption>(() => {
           data: [{ xAxis: currentHour }],
         },
       },
-      lineSeries(
-        '园区总电负荷',
-        '#46b3ff',
-        store.scenarioData.hourly.map((item) => item.totalElectricLoadKw),
-      ),
-      lineSeries(
-        '冷热源机组电功率',
-        '#c68cff',
-        store.scenarioData.hourly.map((item) => item.plantElectricPowerKw),
-      ),
-      lineSeries(
-        '电网购电',
-        '#ffd66b',
-        store.scenarioData.hourly.map((item) => item.gridImportKw),
-      ),
+      dischargeSeries,
+      {
+        ...levelSeries,
+        yAxisIndex: 1,
+        areaStyle: undefined,
+      },
     ],
   };
 });

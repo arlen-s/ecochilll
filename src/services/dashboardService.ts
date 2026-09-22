@@ -7,12 +7,13 @@ import type {
   DashboardRuntimeMeta,
   DashboardScenarioData,
   DataSourceMode,
+  OperatingMode,
   PresentationChapter,
   ScenarioMode,
 } from '@/types/energy';
 
 export interface DashboardService {
-  getScenarioData(scenario: ScenarioMode): Promise<DashboardScenarioData>;
+  getScenarioData(scenario: ScenarioMode, operationMode: OperatingMode): Promise<DashboardScenarioData>;
   getPresentationChapters(): Promise<PresentationChapter[]>;
   getRuntimeMeta(): Promise<DashboardRuntimeMeta>;
 }
@@ -34,9 +35,12 @@ const fetchJson = async <T>(input: string): Promise<T> => {
 };
 
 class MockDashboardService implements DashboardService {
-  async getScenarioData(scenario: ScenarioMode): Promise<DashboardScenarioData> {
+  async getScenarioData(
+    scenario: ScenarioMode,
+    operationMode: OperatingMode,
+  ): Promise<DashboardScenarioData> {
     await wait(120);
-    return buildScenarioData(scenario);
+    return buildScenarioData(scenario, operationMode);
   }
 
   async getPresentationChapters(): Promise<PresentationChapter[]> {
@@ -53,8 +57,13 @@ class MockDashboardService implements DashboardService {
 class HttpDashboardService implements DashboardService {
   constructor(private readonly baseUrl: string) {}
 
-  async getScenarioData(scenario: ScenarioMode): Promise<DashboardScenarioData> {
-    return fetchJson<DashboardScenarioData>(`${this.baseUrl}/dashboard/scenario?mode=${scenario}`);
+  async getScenarioData(
+    scenario: ScenarioMode,
+    operationMode: OperatingMode,
+  ): Promise<DashboardScenarioData> {
+    return fetchJson<DashboardScenarioData>(
+      `${this.baseUrl}/dashboard/scenario?mode=${encodeURIComponent(scenario)}&operationMode=${encodeURIComponent(operationMode)}`,
+    );
   }
 
   async getPresentationChapters(): Promise<PresentationChapter[]> {
