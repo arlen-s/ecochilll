@@ -27,7 +27,8 @@
           <button class="zoom-controls__btn zoom-controls__btn--wide" type="button" @click="sceneApi?.resetZoom()">重置</button>
         </div>
         <div class="legend">
-          <span><i class="legend__dot legend__dot--green"></i> 光伏/电网供电</span>
+          <span><i class="legend__dot legend__dot--green"></i> 光伏供电</span>
+          <span><i class="legend__dot legend__dot--grid"></i> 电网供电</span>
           <span><i class="legend__dot" :style="{ background: thermalLegend.chargeColor }"></i> {{ thermalLegend.charge }}</span>
           <span><i class="legend__dot" :style="{ background: thermalLegend.dischargeColor }"></i> {{ thermalLegend.discharge }}</span>
         </div>
@@ -311,6 +312,10 @@ onBeforeUnmount(() => {
 
 .legend__dot--green {
   background: #15f5ba;
+}
+
+.legend__dot--grid {
+  background: #ff9d7f;
 }
 
 .legend__dot--blue {

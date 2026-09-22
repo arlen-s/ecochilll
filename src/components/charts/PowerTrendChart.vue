@@ -15,12 +15,20 @@ const option = computed<DashboardChartOption>(() => {
   const currentHour = store.scenarioData.hourly[store.liveHourIndex].hour;
 
   return {
-    grid: commonGrid,
+    grid: {
+      ...commonGrid,
+      top: 58,
+    },
     tooltip: tooltipTheme,
     legend: {
+      type: 'scroll',
       top: 0,
-      right: 10,
+      left: 8,
+      right: 8,
       textStyle: { color: 'rgba(219,239,255,0.64)' },
+      pageTextStyle: { color: 'rgba(219,239,255,0.64)' },
+      pageIconColor: '#46b3ff',
+      pageIconInactiveColor: 'rgba(219,239,255,0.24)',
     },
     xAxis: {
       type: 'category' as const,

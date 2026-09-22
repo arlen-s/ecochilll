@@ -27,6 +27,7 @@ interface FlowPath {
   color: THREE.Color;
   visibleFactor: number;
   speed: number;
+  phase: number;
 }
 
 interface ThermalTankVisuals {
@@ -90,6 +91,20 @@ const applyZoomScaleToPreset = (
 const tempVector = new THREE.Vector3();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
+
+export const advanceFlowPhase = (
+  phase: number,
+  deltaSeconds: number,
+  speed: number,
+  visibleFactor: number,
+) => {
+  const safePhase = Number.isFinite(phase) ? phase : 0;
+  const safeDelta = Math.max(Number.isFinite(deltaSeconds) ? deltaSeconds : 0, 0);
+  const safeSpeed = Math.max(Number.isFinite(speed) ? speed : 0, 0);
+  const activity = Math.min(Math.max(Number.isFinite(visibleFactor) ? visibleFactor : 0, 0), 1);
+
+  return (safePhase + safeDelta * safeSpeed * (0.9 + activity)) % 1;
+};
 
 const cacheGroupBaseIntensity = (group: THREE.Object3D) => {
   group.traverse((child) => {
@@ -558,6 +573,7 @@ const createFlowPath = (id: string, points: THREE.Vector3[], color: string, spee
     color: new THREE.Color(color),
     visibleFactor: 1,
     speed,
+    phase: 0,
   } satisfies FlowPath;
 };
 
@@ -832,7 +848,8 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
   renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
 
   const animate = () => {
-    const elapsed = clock.getElapsedTime();
+    const delta = Math.min(clock.getDelta(), 0.1);
+    const elapsed = clock.elapsedTime;
     controls.update();
 
     if (focus === 'overview') {
@@ -858,8 +875,9 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
     clouds.position.x = Math.sin(elapsed * 0.08) * 0.6;
 
     flows.forEach((flow) => {
-      flow.particles.forEach((particle, index) => {
-        const t = (elapsed * flow.speed * (0.9 + flow.visibleFactor) + particle.offset) % 1;
+      flow.phase = advanceFlowPhase(flow.phase, delta, flow.speed, flow.visibleFactor);
+      flow.particles.forEach((particle) => {
+        const t = (flow.phase + particle.offset) % 1;
         flow.curve.getPointAt(t, particle.mesh.position);
         particle.mesh.visible = flow.visibleFactor > 0.18;
         particle.mesh.scale.setScalar(0.7 + flow.visibleFactor * 0.7);
