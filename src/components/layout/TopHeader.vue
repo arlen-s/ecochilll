@@ -77,12 +77,15 @@ import type { OperatingMode, ScenarioMode } from '@/types/energy';
 
 const store = useDashboardStore();
 
-const scenarios: Array<{ label: string; value: ScenarioMode }> = [
+const scenarios = computed<Array<{ label: string; value: ScenarioMode }>>(() => [
   { label: '正常模式', value: 'normal' },
-  { label: '高温模式', value: 'heatwave' },
+  {
+    label: store.operationMode === 'heating' ? '寒潮模式' : '高温模式',
+    value: 'heatwave',
+  },
   { label: '云遮挡模式', value: 'cloudy' },
   { label: '高峰电价', value: 'peakPricing' },
-];
+]);
 
 const operationModes: Array<{ season: string; storage: string; value: OperatingMode }> = [
   { season: '制冷季', storage: '水蓄冷', value: 'cooling' },

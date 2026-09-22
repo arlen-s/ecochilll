@@ -285,7 +285,7 @@ const createPvArray = () => {
 const createAcStation = () => {
   const group = new THREE.Group();
   group.position.set(5.4, 0, 5.8);
-  group.userData = { id: 'ac', label: '空调冷站', interactive: true };
+  group.userData = { id: 'ac', label: '冷热源机房', interactive: true };
 
   const base = new THREE.Mesh(
     new THREE.BoxGeometry(3.8, 1.1, 2.8),

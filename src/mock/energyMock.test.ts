@@ -14,10 +14,28 @@ const operationModes: OperatingMode[] = ['cooling', 'heating'];
 
 const expectedConfig: Record<
   OperatingMode,
-  { volumeM3: number; supplyTempC: number; returnTempC: number; plantCop: number }
+  {
+    volumeM3: number;
+    supplyTempC: number;
+    returnTempC: number;
+    plantCop: number;
+    maxDischargePowerKwTh: number;
+  }
 > = {
-  cooling: { volumeM3: 180, supplyTempC: 6, returnTempC: 13, plantCop: 5.2 },
-  heating: { volumeM3: 180, supplyTempC: 45, returnTempC: 35, plantCop: 3.4 },
+  cooling: {
+    volumeM3: 180,
+    supplyTempC: 6,
+    returnTempC: 13,
+    plantCop: 5.2,
+    maxDischargePowerKwTh: 220,
+  },
+  heating: {
+    volumeM3: 180,
+    supplyTempC: 45,
+    returnTempC: 35,
+    plantCop: 3.4,
+    maxDischargePowerKwTh: 240,
+  },
 };
 
 describe.each(operationModes)('%s water thermal-storage mock', (operationMode) => {
@@ -144,16 +162,29 @@ describe.each(operationModes)('%s water thermal-storage mock', (operationMode) =
     it('prices storage benefit against the same-PV no-storage grid bill', () => {
       const data = buildScenarioData(scenario, operationMode);
       const { plantCop } = expectedConfig[operationMode];
-      const expectedStorageBenefitCny = data.hourly.reduce((sum, point) => {
+      const expectedHourlyStorageBenefitCny = data.hourly.map((point) => {
         const noStorageTotalLoadKw =
           point.baseElectricLoadKw + point.thermalLoadKwTh / plantCop + 2;
         const noStorageGridImportKw = Math.max(0, noStorageTotalLoadKw - point.photovoltaicKw);
-        return sum + (
+        return (
           noStorageGridImportKw * point.priceCny - point.gridImportKw * point.priceCny
         );
-      }, 0);
+      });
+      const expectedStorageBenefitCny = expectedHourlyStorageBenefitCny.reduce(
+        (sum, benefit) => sum + benefit,
+        0,
+      );
 
+      data.hourly.forEach((point, index) => {
+        expect(point.storageBenefitCny).toBeCloseTo(expectedHourlyStorageBenefitCny[index], 9);
+      });
       expect(data.economics.peakValleyBenefitCny).toBeCloseTo(expectedStorageBenefitCny, 9);
+      expect(data.ai.expectedBenefitCny).toBe(Math.round(expectedStorageBenefitCny));
+      expect(data.ai.strategyRules.map((rule) => rule.expectedBenefitCny)).toEqual([
+        Math.round(expectedStorageBenefitCny * 0.28),
+        Math.round(expectedStorageBenefitCny * 0.34),
+        Math.round(expectedStorageBenefitCny * 0.38),
+      ]);
     });
 
     it('reconciles live signed storage benefit from the first through final hour', () => {
@@ -194,6 +225,11 @@ describe.each(operationModes)('%s water thermal-storage mock', (operationMode) =
       expect(data.storage.supplyTempC).toBe(config.supplyTempC);
       expect(data.storage.returnTempC).toBe(config.returnTempC);
       expect(data.storage.storedEnergyKwhTh).toBeCloseTo(data.hourly[14].storedEnergyKwhTh, 8);
+      expect(data.storage.availableHours).toBeCloseTo(
+        data.hourly[14].storedEnergyKwhTh * 0.92
+          / Math.min(data.hourly[14].thermalLoadKwTh, config.maxDischargePowerKwTh),
+        8,
+      );
 
       if (operationMode === 'cooling') {
         expect(data.storage.supplyTempC).toBeLessThan(data.storage.returnTempC);
@@ -255,6 +291,18 @@ describe('mode-aware scenario and presentation output', () => {
     expect(heatingStress.scenarioLabel).toContain('寒潮');
     expect(heatingStress.hourly[14].ambientTempC).toBeLessThan(heatingNormal.hourly[14].ambientTempC);
     expect(heatingStress.hourly[14].ambientTempC).toBeLessThan(15);
+  });
+
+  it('uses heating status semantics throughout heating scenario and live outputs', () => {
+    const heating = buildScenarioData('heatwave', 'heating');
+    const live = deriveLiveSnapshot(heating, 7);
+    const plantNode = heating.nodes.find((node) => node.id === 'ac');
+
+    expect(heating.airConditioning.runningStatus).toMatch(/供热/);
+    expect(heating.airConditioning.zones.every((zone) => !zone.status.includes('制冷'))).toBe(true);
+    expect(live.airConditioning.runningStatus).toMatch(/供热/);
+    expect(live.airConditioning.zones.every((zone) => !zone.status.includes('制冷'))).toBe(true);
+    expect(plantNode?.state).toMatch(/供热/);
   });
 
   it('preserves six valid chapters with deterministic operating modes', () => {

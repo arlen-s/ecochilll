@@ -270,9 +270,12 @@ const isDischargeWindow = (
   return electricalPeakHours.has(hour);
 };
 
-const getStatusByLoad = (loadKwTh: number): AirConditionStatus => {
-  if (loadKwTh >= 500) return '制冷增强';
-  if (loadKwTh >= 360) return '常规制冷';
+const getStatusByLoad = (
+  loadKwTh: number,
+  operationMode: OperatingMode,
+): AirConditionStatus => {
+  if (loadKwTh >= 500) return operationMode === 'cooling' ? '制冷增强' : '供热增强';
+  if (loadKwTh >= 360) return operationMode === 'cooling' ? '常规制冷' : '常规供热';
   if (loadKwTh >= 220) return '节能模式';
   return '待机巡检';
 };
@@ -444,6 +447,7 @@ export const buildHourlySeries = (
       storageLevelPct: storageStep.storageLevelPct,
       carbonReductionKg: directPvDisplacementKw * GRID_EMISSION_FACTOR_KG_PER_KWH,
       savingCny: economicsComparison.overallSavingCny,
+      storageBenefitCny: economicsComparison.storageBenefitCny,
       priceCny,
       irradianceWm2: Math.round(920 * solarCurve * meta.pvFactor * occlusionFactor),
       ambientTempC,
@@ -484,7 +488,7 @@ const buildAiDecision = (
 ): AiDecisionOutput => {
   const meta = getScenarioMeta(scenario, operationMode);
   const terms = getModeTerms(operationMode);
-  const totalSaving = hourly.reduce((sum, item) => sum + item.savingCny, 0);
+  const totalStorageBenefit = hourly.reduce((sum, item) => sum + item.storageBenefitCny, 0);
   const totalCarbon = hourly.reduce((sum, item) => sum + item.carbonReductionKg, 0);
   const confidenceByScenario: Record<ScenarioMode, number> = {
     normal: 93,
@@ -505,7 +509,7 @@ const buildAiDecision = (
     confidencePct: confidenceByScenario[scenario],
     summary: `${terms.plant}、光伏与分层蓄能水罐协同运行；谷段从电网取电${terms.charge}，光伏富余时独立执行绿电${terms.charge}，峰段按${terms.available}决定${terms.discharge}功率。`,
     recommendation: `${scenario === 'cloudy' ? '云层遮挡期间保留安全余量；' : ''}建议维持关键区域优先级，并根据储能率动态调整${terms.discharge}强度。`,
-    expectedBenefitCny: Math.round(totalSaving),
+    expectedBenefitCny: Math.round(totalStorageBenefit),
     expectedCarbonKg: Math.round(totalCarbon),
     strategyRules: [
       {
@@ -514,7 +518,7 @@ const buildAiDecision = (
         score: 90,
         description: `仅在 00:00-06:00 谷价时段由电网驱动${terms.plant}${terms.charge}，并受水罐剩余空间约束。`,
         expectedSavingPct: 9.2,
-        expectedBenefitCny: Math.round(totalSaving * 0.28),
+        expectedBenefitCny: Math.round(totalStorageBenefit * 0.28),
         flow: 'charge',
       },
       {
@@ -523,7 +527,7 @@ const buildAiDecision = (
         score: 94,
         description: `光伏覆盖园区实时电负荷后，才用真实电力余量驱动${terms.plant}${terms.charge}。`,
         expectedSavingPct: 13.6,
-        expectedBenefitCny: Math.round(totalSaving * 0.34),
+        expectedBenefitCny: Math.round(totalStorageBenefit * 0.34),
         flow: 'charge',
       },
       {
@@ -532,7 +536,7 @@ const buildAiDecision = (
         score: scenario === 'peakPricing' ? 98 : 92,
         description: `在峰价或负荷压力窗口按${terms.available}执行${terms.discharge}，直接降低${terms.plant}电功率。`,
         expectedSavingPct: scenario === 'peakPricing' ? 21.3 : 15.4,
-        expectedBenefitCny: Math.round(totalSaving * 0.38),
+        expectedBenefitCny: Math.round(totalStorageBenefit * 0.38),
         flow: 'discharge',
       },
     ],
@@ -645,7 +649,7 @@ const buildNodes = (
       type: 'ac',
       powerValue: live.thermalLoadKwTh,
       powerUnit: 'kWth',
-      state: getStatusByLoad(live.thermalLoadKwTh),
+      state: getStatusByLoad(live.thermalLoadKwTh, operationMode),
       efficiencyPct: clamp(84 - (meta.loadFactor - 1) * 18, 72, 92),
       detail: `${terms.plant}联动楼栋末端与分层水系统，按实时${terms.demand}负荷调节输出。`,
     },
@@ -694,7 +698,12 @@ const buildStorageMetrics = (
     supplyTempC: config.supplyTempC,
     returnTempC: config.returnTempC,
     roundTripEfficiencyPct: CHARGE_EFFICIENCY * DISCHARGE_EFFICIENCY * 100,
-    availableHours: deriveAvailableHours(point.storedEnergyKwhTh, point.thermalLoadKwTh),
+    availableHours: deriveAvailableHours(
+      point.storedEnergyKwhTh,
+      point.thermalLoadKwTh,
+      DISCHARGE_EFFICIENCY,
+      config.maxDischargePowerKwTh,
+    ),
   };
 };
 
@@ -709,10 +718,7 @@ export const buildScenarioData = (
   const live = hourly[14];
   const pvDay = hourly.reduce((sum, item) => sum + item.photovoltaicKw, 0);
   const savingTotal = hourly.reduce((sum, item) => sum + item.savingCny, 0);
-  const storageBenefitTotal = hourly.reduce(
-    (sum, item) => sum + compareHourlyGridCosts(item, config.plantCop).storageBenefitCny,
-    0,
-  );
+  const storageBenefitTotal = hourly.reduce((sum, item) => sum + item.storageBenefitCny, 0);
   const carbonTotal = hourly.reduce((sum, item) => sum + item.carbonReductionKg, 0);
   const panelTempC = Number((live.ambientTempC + 13 + meta.pvFactor * 4).toFixed(1));
   const photovoltaicEfficiencyPct = Number(getPhotovoltaicEfficiencyPct(panelTempC, meta).toFixed(1));
@@ -746,12 +752,12 @@ export const buildScenarioData = (
     indoorAvgTempC: weather.indoorTempC,
     humidityPct: weather.humidityPct,
     comfortPct: weather.comfortIndex,
-    runningStatus: getStatusByLoad(live.thermalLoadKwTh),
+    runningStatus: getStatusByLoad(live.thermalLoadKwTh, operationMode),
     zones: zoneFractions.map((fraction, index) => ({
       id: `z${index + 1}`,
       name: zoneNames[index],
       loadKwTh: live.thermalLoadKwTh * fraction,
-      status: getStatusByLoad(live.thermalLoadKwTh * fraction),
+      status: getStatusByLoad(live.thermalLoadKwTh * fraction, operationMode),
       indoorTempC: Number((weather.indoorTempC + [0.3, -0.2, 0.1, 0.4][index]).toFixed(1)),
       targetTempC: operationMode === 'cooling'
         ? [25, 24.5, 24.8, 25.8][index]
@@ -824,10 +830,7 @@ export const deriveLiveSnapshot = (
     .reduce((sum, item) => sum + item.savingCny, 0);
   const storageBenefitProgress = data.hourly
     .slice(0, hourIndex + 1)
-    .reduce(
-      (sum, item) => sum + compareHourlyGridCosts(item, config.plantCop).storageBenefitCny,
-      0,
-    );
+    .reduce((sum, item) => sum + item.storageBenefitCny, 0);
   const carbonProgress = data.hourly
     .slice(0, hourIndex + 1)
     .reduce((sum, item) => sum + item.carbonReductionKg, 0);
@@ -872,10 +875,14 @@ export const deriveLiveSnapshot = (
       thermalLoadKwTh: point.thermalLoadKwTh,
       outdoorTempC: point.ambientTempC,
       comfortPct: Number(comfort.toFixed(1)),
-      runningStatus: getStatusByLoad(point.thermalLoadKwTh),
+      runningStatus: getStatusByLoad(point.thermalLoadKwTh, data.operationMode),
       zones: data.airConditioning.zones.map((zone, index) => ({
         ...zone,
         loadKwTh: point.thermalLoadKwTh * [0.34, 0.27, 0.22, 0.17][index],
+        status: getStatusByLoad(
+          point.thermalLoadKwTh * [0.34, 0.27, 0.22, 0.17][index],
+          data.operationMode,
+        ),
         comfortPct: clamp(
           zone.comfortPct + (index === 1 ? 2 : -1) + (point.photovoltaicKw > 300 ? 2 : 0),
           68,

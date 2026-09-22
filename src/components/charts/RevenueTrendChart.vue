@@ -49,7 +49,7 @@ const option = computed<DashboardChartOption>(() => {
           label: { formatter: '当前回放', color: '#ffd66b' },
           data: [{ xAxis: currentHour }],
         },
-        data: store.scenarioData.hourly.map((item) => item.savingCny),
+        data: store.scenarioData.hourly.map((item) => item.storageBenefitCny),
       },
       {
         type: 'line' as const,

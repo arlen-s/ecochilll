@@ -4,7 +4,7 @@
       <div class="headline">
         <div>
           <small>当前运行状态</small>
-          <strong>{{ displayStatus(live.airConditioning.runningStatus) }}</strong>
+          <strong>{{ live.airConditioning.runningStatus }}</strong>
         </div>
         <div class="comfort-pill">舒适度 {{ live.airConditioning.comfortPct.toFixed(0) }}%</div>
       </div>
@@ -17,7 +17,7 @@
           </header>
           <div class="zone-meta">
             <span>{{ zone.indoorTempC.toFixed(1) }}℃ / {{ zone.humidityPct.toFixed(0) }}%</span>
-            <span>{{ displayStatus(zone.status) }}</span>
+            <span>{{ zone.status }}</span>
             <span>舒适 {{ zone.comfortPct.toFixed(0) }}%</span>
           </div>
         </article>
@@ -43,17 +43,10 @@ import SectionCard from '@/components/layout/SectionCard.vue';
 import AiDecisionPanel from '@/components/panels/AiDecisionPanel.vue';
 import ThermalStoragePanel from '@/components/panels/ThermalStoragePanel.vue';
 import { useDashboardStore } from '@/store/dashboard';
-import type { AirConditionStatus } from '@/types/energy';
 
 const store = useDashboardStore();
 const live = computed(() => store.liveSnapshot);
 
-const displayStatus = (status: AirConditionStatus) => {
-  if (store.operationMode !== 'heating') return status;
-  if (status === '制冷增强') return '供热增强';
-  if (status === '常规制冷') return '常规供热';
-  return status;
-};
 </script>
 
 <style scoped lang="scss">

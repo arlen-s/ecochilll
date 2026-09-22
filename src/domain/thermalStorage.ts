@@ -26,11 +26,21 @@ export function calculateSensibleHeatCapacity(volumeM3: number, temperatureDiffe
   return volumeM3 * temperatureDifferenceK * WATER_HEAT_CAPACITY_KWH_PER_M3_K;
 }
 
-export function deriveAvailableHours(storedEnergyKwhTh: number, thermalDemandKwTh: number): number {
+export function deriveAvailableHours(
+  storedEnergyKwhTh: number,
+  thermalDemandKwTh: number,
+  dischargeEfficiency: number,
+  maxDischargePowerKwTh: number,
+): number {
   assertNonNegativeFinite('storedEnergyKwhTh', storedEnergyKwhTh);
   assertNonNegativeFinite('thermalDemandKwTh', thermalDemandKwTh);
+  assertEfficiency('dischargeEfficiency', dischargeEfficiency);
+  assertNonNegativeFinite('maxDischargePowerKwTh', maxDischargePowerKwTh);
 
-  return thermalDemandKwTh === 0 ? 0 : storedEnergyKwhTh / thermalDemandKwTh;
+  const deliverablePowerKwTh = Math.min(thermalDemandKwTh, maxDischargePowerKwTh);
+  return deliverablePowerKwTh === 0
+    ? 0
+    : storedEnergyKwhTh * dischargeEfficiency / deliverablePowerKwTh;
 }
 
 export function stepThermalStorage(input: ThermalStorageStepInput): ThermalStorageStepResult {

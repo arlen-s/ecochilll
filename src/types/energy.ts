@@ -1,7 +1,13 @@
 export type ScenarioMode = 'normal' | 'heatwave' | 'cloudy' | 'peakPricing';
 export type FocusView = 'overview' | 'pv' | 'ac' | 'storage';
 export type FlowDirection = 'charge' | 'discharge' | 'directSupply' | 'gridSupport';
-export type AirConditionStatus = '制冷增强' | '常规制冷' | '节能模式' | '待机巡检';
+export type AirConditionStatus =
+  | '制冷增强'
+  | '常规制冷'
+  | '供热增强'
+  | '常规供热'
+  | '节能模式'
+  | '待机巡检';
 export type OperatingMode = 'cooling' | 'heating';
 export type ThermalStorageState = 'charging' | 'discharging' | 'standby';
 export type AlertLevel = 'high' | 'medium' | 'info';
@@ -113,6 +119,7 @@ export interface HourlyPoint {
   storageLevelPct: number;
   carbonReductionKg: number;
   savingCny: number;
+  storageBenefitCny: number;
   priceCny: number;
   irradianceWm2: number;
   ambientTempC: number;

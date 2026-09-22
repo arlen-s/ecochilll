@@ -39,9 +39,14 @@ describe('thermal storage domain', () => {
     })).toThrow('charge and discharge must be mutually exclusive');
   });
 
-  it('derives available hours from stored energy and demand', () => {
-    expect(deriveAvailableHours(500, 0)).toBe(0);
-    expect(deriveAvailableHours(500, 125)).toBe(4);
+  it('derives deliverable hours from stored energy, efficiency, demand, and discharge limit', () => {
+    expect(deriveAvailableHours(500, 125, 0.92, 100)).toBeCloseTo(4.6);
+    expect(deriveAvailableHours(500, 80, 0.92, 100)).toBeCloseTo(5.75);
+  });
+
+  it('returns zero available hours when demand or maximum discharge power is zero', () => {
+    expect(deriveAvailableHours(500, 0, 0.92, 100)).toBe(0);
+    expect(deriveAvailableHours(500, 125, 0.92, 0)).toBe(0);
   });
 
   it('clamps discharge to energy remaining after standing loss', () => {
@@ -80,7 +85,9 @@ describe('thermal storage domain', () => {
 
   it('rejects invalid numeric inputs', () => {
     expect(() => calculateSensibleHeatCapacity(-1, 6)).toThrow();
-    expect(() => deriveAvailableHours(500, Number.NaN)).toThrow();
+    expect(() => deriveAvailableHours(500, Number.NaN, 0.92, 100)).toThrow();
+    expect(() => deriveAvailableHours(500, 125, 0, 100)).toThrow();
+    expect(() => deriveAvailableHours(500, 125, 0.92, Number.NaN)).toThrow();
     expect(() => stepThermalStorage({
       capacityKwhTh: 700,
       storedEnergyKwhTh: 350,
