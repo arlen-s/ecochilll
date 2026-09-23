@@ -33,59 +33,129 @@ const block = (
 
 type FacadeSide = 'front' | 'back' | 'left' | 'right';
 
+interface WindowPlacement {
+  x: number;
+  y: number;
+  z: number;
+  rotation: number;
+  width: number;
+  height: number;
+  lit: boolean;
+}
+
+const windowFrameGeometry = () => {
+  const shape = new THREE.Shape();
+  shape.moveTo(-0.5, -0.5);
+  shape.lineTo(0.5, -0.5);
+  shape.lineTo(0.5, 0.5);
+  shape.lineTo(-0.5, 0.5);
+  shape.closePath();
+
+  const opening = new THREE.Path();
+  opening.moveTo(-0.38, -0.38);
+  opening.lineTo(-0.38, 0.38);
+  opening.lineTo(0.38, 0.38);
+  opening.lineTo(0.38, -0.38);
+  opening.closePath();
+  shape.holes.push(opening);
+
+  return new THREE.ExtrudeGeometry(shape, { depth: 0.035, bevelEnabled: false });
+};
+
 const addWindows = (
   group: THREE.Group,
   options: CampusBuildingOptions,
-  side: FacadeSide,
-  glass: THREE.MeshStandardMaterial,
+  darkGlass: THREE.MeshStandardMaterial,
+  litGlass: THREE.MeshStandardMaterial,
+  frameMaterial: THREE.MeshStandardMaterial,
 ) => {
   const { width, height, depth, kind } = options;
   const floorCount = Math.max(3, Math.round(height / 1.5));
   const floorHeight = height / floorCount;
-  const frontBack = side === 'front' || side === 'back';
-  const span = frontBack ? width : depth;
-  const columns = Math.max(3, Math.round(span / 0.95));
-  const cellWidth = (span - 0.55) / columns;
-  const windowWidth = Math.min(0.72, cellWidth * 0.72);
   const windowHeight = floorHeight * (kind === 'library' ? 0.58 : 0.5);
-  const placements: Array<{ x: number; y: number; z: number; rotation: number; tone: number }> = [];
+  const placements: WindowPlacement[] = [];
+  const sides: FacadeSide[] = ['front', 'back', 'left', 'right'];
 
-  for (let floor = 0; floor < floorCount; floor += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      const along = -span / 2 + 0.275 + cellWidth * (column + 0.5);
-      if (side === 'front' && kind === 'library' && Math.abs(along) < 0.75) continue;
-      if (side === 'front' && floor === 0 && Math.abs(along) < 0.55) continue;
+  sides.forEach((side, sideIndex) => {
+    const frontBack = side === 'front' || side === 'back';
+    const span = frontBack ? width : depth;
+    const columns = Math.max(3, Math.round(span / 0.95));
+    const cellWidth = (span - 0.55) / columns;
+    const windowWidth = Math.min(0.72, cellWidth * 0.72);
+    const surface = (frontBack ? depth : width) / 2 - 0.045;
+    const rotation = [0, Math.PI, -Math.PI / 2, Math.PI / 2][sideIndex];
 
-      const y = floor * floorHeight + floorHeight * 0.57;
-      const surface = frontBack ? depth / 2 - 0.035 : width / 2 - 0.035;
-      const x = frontBack ? along : (side === 'left' ? -surface : surface);
-      const z = frontBack ? (side === 'front' ? surface : -surface) : along;
-      const rotation = frontBack ? 0 : Math.PI / 2;
-      // A stable pattern makes some rooms read as occupied without frame-to-frame flicker.
-      const tone = (floor * 7 + column * 3 + (side === 'front' ? 1 : 2)) % 9;
-      placements.push({ x, y, z, rotation, tone });
+    for (let floor = 0; floor < floorCount; floor += 1) {
+      for (let column = 0; column < columns; column += 1) {
+        const along = -span / 2 + 0.275 + cellWidth * (column + 0.5);
+        if (side === 'front' && kind === 'library' && Math.abs(along) < 0.75) continue;
+        if (side === 'front' && floor === 0 && Math.abs(along) < 0.55) continue;
+
+        // At least one warm window per facade; the rest follow a stable sparse pattern.
+        const lit = (floor === sideIndex % floorCount && column === sideIndex % columns)
+          || (floor * 7 + column * 3 + sideIndex * 2) % 17 === 0;
+        placements.push({
+          x: frontBack ? along : side === 'left' ? -surface : surface,
+          y: floor * floorHeight + floorHeight * 0.57,
+          z: frontBack ? side === 'front' ? surface : -surface : along,
+          rotation,
+          width: windowWidth,
+          height: windowHeight,
+          lit,
+        });
+      }
     }
-  }
+  });
 
-  const windows = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(windowWidth, windowHeight, 0.045),
-    glass,
+  const dummy = new THREE.Object3D();
+  const setPlacement = (placement: WindowPlacement, outward = 0) => {
+    dummy.position.set(
+      placement.x + Math.sin(placement.rotation) * outward,
+      placement.y,
+      placement.z + Math.cos(placement.rotation) * outward,
+    );
+    dummy.rotation.y = placement.rotation;
+  };
+
+  const paneGeometry = new THREE.BoxGeometry(1, 1, 0.045);
+  ([
+    ['window-panes-dark', darkGlass, placements.filter((placement) => !placement.lit)],
+    ['window-panes-lit', litGlass, placements.filter((placement) => placement.lit)],
+  ] as const).forEach(([name, surface, selected]) => {
+    const panes = new THREE.InstancedMesh(paneGeometry, surface, selected.length);
+    panes.name = name;
+    selected.forEach((placement, index) => {
+      setPlacement(placement);
+      dummy.scale.set(placement.width, placement.height, 1);
+      dummy.updateMatrix();
+      panes.setMatrixAt(index, dummy.matrix);
+    });
+    panes.instanceMatrix.needsUpdate = true;
+    group.add(panes);
+  });
+
+  const frames = new THREE.InstancedMesh(windowFrameGeometry(), frameMaterial, placements.length);
+  frames.name = 'window-frames';
+  const mullions = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(0.045, 1, 0.035),
+    frameMaterial,
     placements.length,
   );
-  windows.name = `windows-${side}`;
-  const dummy = new THREE.Object3D();
+  mullions.name = 'window-mullions';
   placements.forEach((placement, index) => {
-    dummy.position.set(placement.x, placement.y, placement.z);
-    dummy.rotation.y = placement.rotation;
+    setPlacement(placement, 0.012);
+    dummy.scale.set(placement.width + 0.12, placement.height + 0.12, 1);
     dummy.updateMatrix();
-    windows.setMatrixAt(index, dummy.matrix);
-    windows.setColorAt(index, new THREE.Color(
-      placement.tone === 0 ? '#d8d4aa' : placement.tone < 4 ? '#a3cad8' : '#5d90a9',
-    ));
+    frames.setMatrixAt(index, dummy.matrix);
+
+    setPlacement(placement, 0.042);
+    dummy.scale.set(1, placement.height, 1);
+    dummy.updateMatrix();
+    mullions.setMatrixAt(index, dummy.matrix);
   });
-  windows.instanceMatrix.needsUpdate = true;
-  if (windows.instanceColor) windows.instanceColor.needsUpdate = true;
-  group.add(windows);
+  frames.instanceMatrix.needsUpdate = true;
+  mullions.instanceMatrix.needsUpdate = true;
+  group.add(frames, mullions);
 };
 
 const addAtrium = (group: THREE.Group, options: CampusBuildingOptions, trim: THREE.Material) => {
@@ -128,6 +198,9 @@ export const createCampusBuilding = (options: CampusBuildingOptions): THREE.Grou
   const trim = material(kind === 'teaching' ? '#80a8b8' : '#718fa2', '#315c6d', 0.12, 0.55);
   const darkTrim = material('#2b5269', '#28566d', 0.12, 0.56);
   const glass = material('#b0d5e0', '#4e8ea5', 0.12, 0.38);
+  const windowDark = material('#78aabd', '#306a82', 0.08, 0.35);
+  const windowLit = material('#f2dba8', '#f5b669', 0.42, 0.12);
+  const windowTrim = material('#8daeba', '#447487', 0.14, 0.53);
   const facade = material('#19495f', '#27617a', 0.14, 0.32);
 
   group.add(block('opaque-core', [width - 0.12, height, depth - 0.12], [0, height / 2, 0], structure));
@@ -145,7 +218,7 @@ export const createCampusBuilding = (options: CampusBuildingOptions): THREE.Grou
   group.add(block('facade-glass-back', [width - 0.33, facadeHeight, 0.045], [0, facadeHeight / 2 + 0.26, -depth / 2 + 0.075], facade));
   group.add(block('facade-glass-left', [0.045, facadeHeight, depth - 0.33], [-width / 2 + 0.075, facadeHeight / 2 + 0.26, 0], facade));
   group.add(block('facade-glass-right', [0.045, facadeHeight, depth - 0.33], [width / 2 - 0.075, facadeHeight / 2 + 0.26, 0], facade));
-  (['front', 'back', 'left', 'right'] as const).forEach((side) => addWindows(group, options, side, glass));
+  addWindows(group, options, windowDark, windowLit, windowTrim);
 
   // Solid corner piers frame the glass and remain visible at overview scale.
   for (const x of [-width / 2 + 0.12, width / 2 - 0.12]) {
