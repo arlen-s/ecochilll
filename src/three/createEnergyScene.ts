@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { FocusView, OperatingMode, ScenarioMode, ThermalStorageMetrics } from '@/types/energy';
 import { deriveThermalVisualState } from './thermalVisualState';
+import { createCampusBuilding } from './campusBuildings';
 
 interface HoverPayload {
   id: string;
@@ -193,44 +194,6 @@ const createRoundedPlatform = () => {
   platform.add(innerGrid);
 
   return platform;
-};
-
-const createBuilding = (
-  size: THREE.Vector3,
-  position: THREE.Vector3,
-  color: string,
-  label: string,
-  id: string,
-) => {
-  const group = new THREE.Group();
-  group.position.copy(position);
-  group.userData = { id, label, interactive: true };
-
-  const body = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), makeLabelMaterial(color));
-  body.position.y = size.y / 2;
-  group.add(body);
-
-  const roof = new THREE.Mesh(
-    new THREE.BoxGeometry(size.x * 0.96, 0.2, size.z * 0.96),
-    new THREE.MeshStandardMaterial({
-      color: '#0d2745',
-      emissive: '#103c5f',
-      emissiveIntensity: 0.35,
-      metalness: 0.8,
-      roughness: 0.24,
-    }),
-  );
-  roof.position.y = size.y + 0.1;
-  group.add(roof);
-
-  const outline = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z)),
-    new THREE.LineBasicMaterial({ color: '#74f7ff', transparent: true, opacity: 0.38 }),
-  );
-  outline.position.y = size.y / 2;
-  group.add(outline);
-
-  return group;
 };
 
 const createPvArray = () => {
@@ -685,9 +648,9 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
   const platform = createRoundedPlatform();
   scene.add(platform);
 
-  const buildingA = createBuilding(new THREE.Vector3(4.6, 6, 4.2), new THREE.Vector3(-6.2, 0, -0.8), '#114b70', '教学楼 A', 'building-a');
-  const buildingB = createBuilding(new THREE.Vector3(4.8, 7.4, 4.6), new THREE.Vector3(0.2, 0, 1.1), '#0d3b5f', '图书馆', 'building-b');
-  const buildingC = createBuilding(new THREE.Vector3(3.8, 4.8, 3.8), new THREE.Vector3(6.2, 0, -1.6), '#0b3354', '实验楼', 'building-c');
+  const buildingA = createCampusBuilding({ id: 'building-a', label: '教学楼 A', kind: 'teaching', width: 4.6, height: 6, depth: 4.2, position: [-6.2, 0, -0.8] });
+  const buildingB = createCampusBuilding({ id: 'building-b', label: '图书馆', kind: 'library', width: 4.8, height: 7.4, depth: 4.6, position: [0.2, 0, 1.1] });
+  const buildingC = createCampusBuilding({ id: 'building-c', label: '实验楼', kind: 'laboratory', width: 3.8, height: 4.8, depth: 3.8, position: [6.2, 0, -1.6] });
   const pvArray = createPvArray();
   const acStation = createAcStation();
   const thermalTank = createThermalTank();
