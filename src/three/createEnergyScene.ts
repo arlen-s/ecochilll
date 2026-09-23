@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { FocusView, OperatingMode, ScenarioMode, ThermalStorageMetrics } from '@/types/energy';
+import { deriveThermalVisualState } from './thermalVisualState';
 
 interface HoverPayload {
   id: string;
@@ -24,6 +25,7 @@ interface FlowPath {
   curve: THREE.CatmullRomCurve3;
   particles: FlowParticle[];
   line: THREE.Line;
+  glow: THREE.Mesh<THREE.TubeGeometry, THREE.MeshBasicMaterial>;
   color: THREE.Color;
   visibleFactor: number;
   speed: number;
@@ -34,6 +36,13 @@ interface ThermalTankVisuals {
   group: THREE.Group;
   storedLayer: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>;
   returnLayer: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>;
+  interfaceSurface: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  interfaceRim: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>;
+  pulseRing: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>;
+  shellMaterial: THREE.MeshStandardMaterial;
+  capMaterial: THREE.MeshStandardMaterial;
+  rimMaterial: THREE.MeshStandardMaterial;
+  pipeMaterial: THREE.MeshStandardMaterial;
   internalBottom: number;
   internalHeight: number;
 }
@@ -91,6 +100,7 @@ const applyZoomScaleToPreset = (
 const tempVector = new THREE.Vector3();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
+const flowForward = new THREE.Vector3(0, 1, 0);
 
 export const advanceFlowPhase = (
   phase: number,
@@ -353,9 +363,48 @@ const createThermalTank = (): ThermalTankVisuals => {
   returnLayer.renderOrder = 1;
   group.add(storedLayer, returnLayer);
 
-  const shell = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.46, 1.46, 4.35, 40, 1, true),
-    new THREE.MeshStandardMaterial({
+  const interfaceSurface = new THREE.Mesh(
+    new THREE.CircleGeometry(1.11, 48),
+    new THREE.MeshBasicMaterial({
+      color: '#29d7ff',
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.24,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  interfaceSurface.rotation.x = -Math.PI / 2;
+  interfaceSurface.renderOrder = 2;
+
+  const interfaceRim = new THREE.Mesh(
+    new THREE.TorusGeometry(1.14, 0.035, 8, 48),
+    new THREE.MeshBasicMaterial({
+      color: '#29d7ff',
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  interfaceRim.rotation.x = Math.PI / 2;
+  interfaceRim.renderOrder = 3;
+
+  const pulseRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.7, 0.045, 8, 48),
+    new THREE.MeshBasicMaterial({
+      color: '#28e0ff',
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  pulseRing.rotation.x = Math.PI / 2;
+  pulseRing.renderOrder = 3;
+  group.add(interfaceSurface, interfaceRim, pulseRing);
+
+  const shellMaterial = new THREE.MeshStandardMaterial({
       color: '#85b5cc',
       emissive: '#3de1ff',
       emissiveIntensity: 0.24,
@@ -365,7 +414,10 @@ const createThermalTank = (): ThermalTankVisuals => {
       opacity: 0.32,
       depthWrite: false,
       side: THREE.DoubleSide,
-    }),
+    });
+  const shell = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.46, 1.46, 4.35, 40, 1, true),
+    shellMaterial,
   );
   shell.position.y = 2.25;
   shell.renderOrder = 2;
@@ -444,7 +496,20 @@ const createThermalTank = (): ThermalTankVisuals => {
   hitTarget.position.set(0.8, 2.35, 0.3);
   group.add(hitTarget);
 
-  return { group, storedLayer, returnLayer, internalBottom, internalHeight };
+  return {
+    group,
+    storedLayer,
+    returnLayer,
+    interfaceSurface,
+    interfaceRim,
+    pulseRing,
+    shellMaterial,
+    capMaterial,
+    rimMaterial,
+    pipeMaterial,
+    internalBottom,
+    internalHeight,
+  };
 };
 
 const createGridGateway = () => {
@@ -554,15 +619,26 @@ const createFlowPath = (id: string, points: THREE.Vector3[], color: string, spee
     new THREE.LineBasicMaterial({
       color,
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.48,
     }),
   );
 
-  const particleGeometry = new THREE.SphereGeometry(0.12, 12, 12);
+  const glow = new THREE.Mesh(
+    new THREE.TubeGeometry(curve, 72, 0.13, 5, false),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+
+  const particleGeometry = new THREE.ConeGeometry(0.15, 0.42, 8);
   const particleMaterial = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
-  const particles = Array.from({ length: 6 }, (_, index) => ({
+  const particles = Array.from({ length: 8 }, (_, index) => ({
     mesh: new THREE.Mesh(particleGeometry, particleMaterial),
-    offset: index / 6,
+    offset: index / 8,
   }));
 
   return {
@@ -570,6 +646,7 @@ const createFlowPath = (id: string, points: THREE.Vector3[], color: string, spee
     curve,
     particles,
     line,
+    glow,
     color: new THREE.Color(color),
     visibleFactor: 1,
     speed,
@@ -656,7 +733,7 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
   ];
 
   flows.forEach((flow) => {
-    flowGroup.add(flow.line);
+    flowGroup.add(flow.glow, flow.line);
     flow.particles.forEach((particle) => flowGroup.add(particle.mesh));
   });
 
@@ -678,11 +755,13 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
   const flowMap = new Map(flows.map((flow) => [flow.id, flow]));
   let operatingMode: OperatingMode = 'cooling';
   let thermalState: ThermalStorageMetrics | null = null;
+  let thermalPulseActivity = 0;
 
   const setFlowColor = (flow: FlowPath | undefined, color: string) => {
     if (!flow) return;
     flow.color.set(color);
     (flow.line.material as THREE.LineBasicMaterial).color.set(color);
+    flow.glow.material.color.set(color);
     flow.particles.forEach((particle) => {
       (particle.mesh.material as THREE.MeshBasicMaterial).color.set(color);
     });
@@ -693,57 +772,62 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
     flow.visibleFactor = THREE.MathUtils.clamp(factor, 0, 1);
     if (speed !== undefined) flow.speed = speed;
     flow.line.visible = flow.visibleFactor > 0;
+    flow.glow.visible = flow.visibleFactor > 0;
     (flow.line.material as THREE.LineBasicMaterial).opacity = flow.visibleFactor > 0
       ? 0.12 + flow.visibleFactor * 0.46
       : 0;
-  };
-
-  const positionTankLayers = (levelPct: number) => {
-    const ratio = THREE.MathUtils.clamp(Number.isFinite(levelPct) ? levelPct / 100 : 0, 0, 1);
-    const storedHeight = thermalTank.internalHeight * ratio;
-    const returnHeight = thermalTank.internalHeight - storedHeight;
-    const minimumScale = 0.018;
-
-    thermalTank.storedLayer.visible = ratio > 0.001;
-    thermalTank.returnLayer.visible = ratio < 0.999;
-    thermalTank.storedLayer.scale.y = Math.max(storedHeight, minimumScale);
-    thermalTank.returnLayer.scale.y = Math.max(returnHeight, minimumScale);
-
-    if (operatingMode === 'cooling') {
-      thermalTank.storedLayer.position.y = thermalTank.internalBottom + storedHeight / 2;
-      thermalTank.returnLayer.position.y = thermalTank.internalBottom + storedHeight + returnHeight / 2;
-    } else {
-      thermalTank.returnLayer.position.y = thermalTank.internalBottom + returnHeight / 2;
-      thermalTank.storedLayer.position.y = thermalTank.internalBottom + returnHeight + storedHeight / 2;
-    }
+    flow.glow.material.opacity = flow.visibleFactor > 0
+      ? 0.04 + flow.visibleFactor * 0.16
+      : 0;
   };
 
   const applyThermalVisuals = () => {
-    const palette = operatingMode === 'cooling'
-      ? { charge: '#28e0ff', discharge: '#4d8dff', stored: '#29d7ff', returned: '#315b9e' }
-      : { charge: '#ff9f43', discharge: '#ff5d5d', stored: '#ff8d3a', returned: '#c43d52' };
-    setFlowColor(flowMap.get('plant-storage'), palette.charge);
-    setFlowColor(flowMap.get('storage-buildings'), palette.discharge);
-    thermalTank.storedLayer.material.color.set(palette.stored);
-    thermalTank.storedLayer.material.emissive.set(palette.stored);
-    thermalTank.returnLayer.material.color.set(palette.returned);
-    thermalTank.returnLayer.material.emissive.set(palette.returned);
+    const visual = deriveThermalVisualState(
+      operatingMode,
+      thermalState,
+      thermalTank.internalBottom,
+      thermalTank.internalHeight,
+    );
+    const minimumScale = 0.018;
 
-    const storageLevel = thermalState?.storageLevelPct ?? 50;
-    positionTankLayers(storageLevel);
+    thermalTank.storedLayer.visible = visual.storedHeight > 0.001;
+    thermalTank.returnLayer.visible = visual.returnHeight > 0.001;
+    thermalTank.storedLayer.scale.y = Math.max(visual.storedHeight, minimumScale);
+    thermalTank.returnLayer.scale.y = Math.max(visual.returnHeight, minimumScale);
+    thermalTank.storedLayer.position.y = visual.storedBottom + visual.storedHeight / 2;
+    thermalTank.returnLayer.position.y = visual.returnBottom + visual.returnHeight / 2;
+    thermalTank.storedLayer.material.color.set(visual.surfaceColor);
+    thermalTank.storedLayer.material.emissive.set(visual.surfaceColor);
+    thermalTank.returnLayer.material.color.set(visual.returnedColor);
+    thermalTank.returnLayer.material.emissive.set(visual.returnedColor);
+    thermalTank.shellMaterial.color.set(operatingMode === 'cooling' ? '#85b5cc' : '#c59479');
+    thermalTank.shellMaterial.emissive.set(visual.frameColor);
+    thermalTank.capMaterial.color.set(operatingMode === 'cooling' ? '#163d58' : '#603829');
+    thermalTank.capMaterial.emissive.set(visual.frameColor);
+    thermalTank.rimMaterial.color.set(operatingMode === 'cooling' ? '#9cc8da' : '#ffd0a4');
+    thermalTank.rimMaterial.emissive.set(visual.frameColor);
+    thermalTank.pipeMaterial.color.set(operatingMode === 'cooling' ? '#24556d' : '#784931');
+    thermalTank.pipeMaterial.emissive.set(visual.frameColor);
 
-    const powerThresholdKwTh = 1;
-    const isCharging = thermalState?.state === 'charging'
-      && thermalState.chargePowerKwTh > powerThresholdKwTh;
-    const isDischarging = thermalState?.state === 'discharging'
-      && thermalState.dischargePowerKwTh > powerThresholdKwTh;
-    const chargePowerFactor = THREE.MathUtils.clamp((thermalState?.chargePowerKwTh ?? 0) / 240, 0, 1);
-    const dischargePowerFactor = THREE.MathUtils.clamp((thermalState?.dischargePowerKwTh ?? 0) / 240, 0, 1);
-    const chargeIntensity = isCharging ? 0.35 + chargePowerFactor * 0.65 : 0;
-    const dischargeIntensity = isDischarging ? 0.35 + dischargePowerFactor * 0.65 : 0;
+    thermalTank.interfaceSurface.visible = visual.surfaceVisible;
+    thermalTank.interfaceRim.visible = visual.surfaceVisible;
+    thermalTank.interfaceSurface.position.y = visual.interfaceY;
+    thermalTank.interfaceRim.position.y = visual.interfaceY;
+    thermalTank.pulseRing.position.y = visual.interfaceY;
+    thermalTank.interfaceSurface.material.color.set(visual.surfaceColor);
+    thermalTank.interfaceRim.material.color.set(visual.surfaceColor);
+    thermalTank.pulseRing.material.color.set(
+      visual.chargeIntensity > 0 ? visual.chargeColor : visual.dischargeColor,
+    );
+    thermalPulseActivity = Math.max(visual.chargeIntensity, visual.dischargeIntensity);
+    thermalTank.pulseRing.visible = visual.surfaceVisible && thermalPulseActivity > 0;
+    thermalTank.interfaceSurface.material.opacity = 0.2 + thermalPulseActivity * 0.13;
+    thermalTank.interfaceRim.material.opacity = 0.42 + thermalPulseActivity * 0.38;
 
-    setFlowActivity(flowMap.get('plant-storage'), chargeIntensity, 0.1 + chargePowerFactor * 0.2);
-    setFlowActivity(flowMap.get('storage-buildings'), dischargeIntensity, 0.1 + dischargePowerFactor * 0.22);
+    setFlowColor(flowMap.get('plant-storage'), visual.chargeColor);
+    setFlowColor(flowMap.get('storage-buildings'), visual.dischargeColor);
+    setFlowActivity(flowMap.get('plant-storage'), visual.chargeIntensity, 0.1 + visual.chargePowerFactor * 0.2);
+    setFlowActivity(flowMap.get('storage-buildings'), visual.dischargeIntensity, 0.1 + visual.dischargePowerFactor * 0.22);
   };
 
   const applyScenario = (nextScenario: ScenarioMode) => {
@@ -874,11 +958,19 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
     halo.position.copy(sun.position);
     clouds.position.x = Math.sin(elapsed * 0.08) * 0.6;
 
+    if (thermalTank.pulseRing.visible) {
+      const pulse = (Math.sin(elapsed * 3.2) + 1) / 2;
+      thermalTank.pulseRing.scale.setScalar(0.94 + pulse * 0.14);
+      thermalTank.pulseRing.material.opacity = thermalPulseActivity * (0.14 + pulse * 0.28);
+    }
+
     flows.forEach((flow) => {
       flow.phase = advanceFlowPhase(flow.phase, delta, flow.speed, flow.visibleFactor);
       flow.particles.forEach((particle) => {
         const t = (flow.phase + particle.offset) % 1;
         flow.curve.getPointAt(t, particle.mesh.position);
+        flow.curve.getTangentAt(t, tempVector);
+        particle.mesh.quaternion.setFromUnitVectors(flowForward, tempVector.normalize());
         particle.mesh.visible = flow.visibleFactor > 0.18;
         particle.mesh.scale.setScalar(0.7 + flow.visibleFactor * 0.7);
         (particle.mesh.material as THREE.MeshBasicMaterial).opacity = 0.4 + flow.visibleFactor * 0.6;
