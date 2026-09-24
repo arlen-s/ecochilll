@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { FocusView, OperatingMode, ScenarioMode, ThermalStorageMetrics } from '@/types/energy';
 import { deriveThermalVisualState } from './thermalVisualState';
 import { createCampusBuilding } from './campusBuildings';
+import { createAcStation, createGridGateway, createPvArray } from './energyEquipment';
 
 interface HoverPayload {
   id: string;
@@ -196,103 +197,6 @@ const createRoundedPlatform = () => {
   return platform;
 };
 
-const createPvArray = () => {
-  const group = new THREE.Group();
-  group.userData = { id: 'pv', label: '屋顶光伏阵列', interactive: true };
-  const panelGeometry = new THREE.BoxGeometry(0.86, 0.06, 0.56);
-  const panelMaterial = new THREE.MeshStandardMaterial({
-    color: '#0d2d54',
-    emissive: '#15f5ba',
-    emissiveIntensity: 0.68,
-    metalness: 0.85,
-    roughness: 0.2,
-  });
-
-  const panelCount = 24;
-  const instanced = new THREE.InstancedMesh(panelGeometry, panelMaterial, panelCount);
-  const dummy = new THREE.Object3D();
-
-  let index = 0;
-  const rows = [0, 1];
-  rows.forEach((row, rowIndex) => {
-    for (let col = 0; col < 6; col += 1) {
-      dummy.position.set(-6.7 + col * 1.1, 6.12, -1.15 + rowIndex * 1.05);
-      dummy.rotation.set(-Math.PI / 6, 0, 0.03);
-      dummy.updateMatrix();
-      instanced.setMatrixAt(index, dummy.matrix);
-      index += 1;
-    }
-  });
-
-  rows.forEach((row, rowIndex) => {
-    for (let col = 0; col < 6; col += 1) {
-      dummy.position.set(-1.2 + col * 0.98, 7.68, 1.1 + rowIndex * 0.9);
-      dummy.rotation.set(-Math.PI / 6, 0.04, 0.02);
-      dummy.updateMatrix();
-      instanced.setMatrixAt(index, dummy.matrix);
-      index += 1;
-    }
-  });
-
-  instanced.instanceMatrix.needsUpdate = true;
-  group.add(instanced);
-
-  const hit = new THREE.Mesh(
-    new THREE.BoxGeometry(10.2, 2.4, 5.6),
-    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }),
-  );
-  hit.position.set(-4, 6.6, 0.2);
-  group.add(hit);
-
-  const glow = new THREE.Mesh(
-    new THREE.RingGeometry(2.3, 3.2, 48),
-    new THREE.MeshBasicMaterial({ color: '#15f5ba', transparent: true, opacity: 0.16, side: THREE.DoubleSide }),
-  );
-  glow.position.set(-4, 6.3, 0.3);
-  glow.rotation.x = Math.PI / 2;
-  group.add(glow);
-
-  return group;
-};
-
-const createAcStation = () => {
-  const group = new THREE.Group();
-  group.position.set(5.4, 0, 5.8);
-  group.userData = { id: 'ac', label: '冷热源机房', interactive: true };
-
-  const base = new THREE.Mesh(
-    new THREE.BoxGeometry(3.8, 1.1, 2.8),
-    makeLabelMaterial('#46b3ff'),
-  );
-  base.position.y = 0.55;
-  group.add(base);
-
-  for (let i = 0; i < 3; i += 1) {
-    const fan = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.45, 0.45, 0.5, 24),
-      new THREE.MeshStandardMaterial({
-        color: '#0d2745',
-        emissive: '#46b3ff',
-        emissiveIntensity: 0.6,
-        roughness: 0.2,
-        metalness: 0.85,
-      }),
-    );
-    fan.rotation.x = Math.PI / 2;
-    fan.position.set(-1 + i * 1, 1.2, 1.18);
-    group.add(fan);
-  }
-
-  const duct = new THREE.Mesh(
-    new THREE.BoxGeometry(1.2, 2.2, 1.2),
-    makeLabelMaterial('#89c8ff'),
-  );
-  duct.position.set(1.25, 1.1, -0.2);
-  group.add(duct);
-
-  return group;
-};
-
 const createThermalTank = (): ThermalTankVisuals => {
   const group = new THREE.Group();
   group.position.set(-10.2, 0, 6.2);
@@ -473,41 +377,6 @@ const createThermalTank = (): ThermalTankVisuals => {
     internalBottom,
     internalHeight,
   };
-};
-
-const createGridGateway = () => {
-  const group = new THREE.Group();
-  group.position.set(12.8, 0, 4.8);
-  group.userData = { id: 'grid', label: '园区电网接口', interactive: true };
-
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.12, 0.18, 5.4, 12),
-    makeLabelMaterial('#ffd66b'),
-  );
-  pole.position.y = 2.7;
-  group.add(pole);
-
-  const arm = new THREE.Mesh(
-    new THREE.BoxGeometry(2.4, 0.16, 0.16),
-    makeLabelMaterial('#ffd66b'),
-  );
-  arm.position.set(0, 4.6, 0);
-  group.add(arm);
-
-  const legLeft = new THREE.Mesh(
-    new THREE.BoxGeometry(0.12, 3.4, 0.12),
-    makeLabelMaterial('#ffd66b'),
-  );
-  legLeft.position.set(-0.9, 1.7, 0);
-  legLeft.rotation.z = 0.22;
-  group.add(legLeft);
-
-  const legRight = legLeft.clone();
-  legRight.position.x = 0.9;
-  legRight.rotation.z = -0.22;
-  group.add(legRight);
-
-  return group;
 };
 
 const createSunAndClouds = () => {

@@ -6,7 +6,7 @@ import revenueTrendSource from '@/components/charts/RevenueTrendChart.vue?raw';
 import rightPanelSource from '@/components/panels/RightPanel.vue?raw';
 import energyTwinSource from '@/components/three/EnergyTwinScene.vue?raw';
 import topHeaderSource from '@/components/layout/TopHeader.vue?raw';
-import energySceneSource from '@/three/createEnergyScene.ts?raw';
+import energyEquipmentSource from '@/three/energyEquipment.ts?raw';
 
 describe('presentation polish regressions', () => {
   it('reserves a scrollable legend area above the electrical chart plot', () => {
@@ -59,7 +59,7 @@ describe('presentation polish regressions', () => {
     expect(topHeaderSource).toContain("store.operationMode === 'heating' ? '寒潮模式' : '高温模式'");
     expect(rightPanelSource).toContain('live.airConditioning.runningStatus');
     expect(rightPanelSource).not.toContain('displayStatus');
-    expect(energySceneSource).toContain("label: '冷热源机房'");
-    expect(energySceneSource).not.toContain("label: '空调冷站'");
+    expect(energyEquipmentSource).toContain("label: '冷热源机房'");
+    expect(energyEquipmentSource).not.toContain("label: '空调冷站'");
   });
 });
