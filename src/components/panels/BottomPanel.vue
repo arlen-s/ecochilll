@@ -42,6 +42,16 @@
     </div>
   </section>
 
+  <nav v-else-if="oneScreenMode" class="bottom-panel-screen glass-card" aria-label="分析模块快捷入口">
+    <strong>分析中心</strong>
+    <button type="button" class="panel-action-btn" @click="activePanel = 'power'">电功率趋势</button>
+    <button type="button" class="panel-action-btn" @click="activePanel = 'thermalLoad'">热负荷趋势</button>
+    <button type="button" class="panel-action-btn" @click="activePanel = 'thermalStorage'">水蓄能趋势</button>
+    <button type="button" class="panel-action-btn" @click="activePanel = 'saving'">碳与峰值分析</button>
+    <button type="button" class="panel-action-btn" @click="activePanel = 'revenue'">移峰节费分析</button>
+    <button type="button" class="panel-action-btn" @click="activePanel = 'timeline'">AI 决策时间轴</button>
+  </nav>
+
   <SectionCard v-else class="bottom-panel-compact" title="更多分析模块" eyebrow="ANALYSIS HUB" accent="cyan">
     <template #actions>
       <span class="metric-chip">分类指标浮窗</span>
@@ -133,12 +143,14 @@ import FocusPanelModal from '@/components/common/FocusPanelModal.vue';
 import SectionCard from '@/components/layout/SectionCard.vue';
 import AiTimelinePanel from '@/components/panels/AiTimelinePanel.vue';
 import { useDashboardStore } from '@/store/dashboard';
+import { isOneScreenViewport } from '@/layout/oneScreenMode';
 
 type AnalysisPanel = 'power' | 'thermalLoad' | 'thermalStorage' | 'saving' | 'revenue' | 'timeline';
 
 const store = useDashboardStore();
 const activePanel = ref<AnalysisPanel | null>(null);
 const desktopAnalysisVisible = ref(false);
+const oneScreenMode = ref(false);
 const isCooling = computed(() => store.operationMode === 'cooling');
 const thermalLoadTitle = computed(() => isCooling.value ? '制冷负荷与供冷构成' : '供热负荷与供热构成');
 const thermalStorageTitle = computed(() => isCooling.value ? '水蓄冷充放趋势' : '水蓄热充放趋势');
@@ -149,19 +161,18 @@ const thermalStorageDescription = computed(() => isCooling.value
   ? '充冷与放冷功率使用 kWth，蓄冷水位使用独立百分比轴。'
   : '充热与放热功率使用 kWth，蓄热水位使用独立百分比轴。');
 
-let desktopMediaQuery: MediaQueryList | null = null;
-const handleDesktopChange = (event: MediaQueryListEvent) => {
-  desktopAnalysisVisible.value = event.matches;
+const syncLayoutMode = () => {
+  oneScreenMode.value = isOneScreenViewport(window.innerWidth, window.innerHeight);
+  desktopAnalysisVisible.value = window.innerWidth > 1440 && !oneScreenMode.value;
 };
 
 onMounted(() => {
-  desktopMediaQuery = window.matchMedia('(min-width: 1441px)');
-  desktopAnalysisVisible.value = desktopMediaQuery.matches;
-  desktopMediaQuery.addEventListener('change', handleDesktopChange);
+  syncLayoutMode();
+  window.addEventListener('resize', syncLayoutMode);
 });
 
 onBeforeUnmount(() => {
-  desktopMediaQuery?.removeEventListener('change', handleDesktopChange);
+  window.removeEventListener('resize', syncLayoutMode);
 });
 </script>
 
@@ -169,6 +180,26 @@ onBeforeUnmount(() => {
 .bottom-panel {
   display: grid;
   gap: 14px;
+}
+
+.bottom-panel-screen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 58px;
+  padding: 8px 14px;
+  border-radius: 18px;
+}
+
+.bottom-panel-screen strong {
+  white-space: nowrap;
+  letter-spacing: 0.08em;
+}
+
+.bottom-panel-screen .panel-action-btn {
+  flex: 1;
+  white-space: nowrap;
 }
 
 .bottom-panel__toolbar {
