@@ -50,6 +50,11 @@ describe('presentation polish regressions', () => {
     expect(energyTwinSource).toMatch(/legend__dot--grid\s*\{\s*background:\s*#ff9d7f/);
   });
 
+  it('keeps the narrow-screen scene controls compact enough to expose the 3D canvas', () => {
+    expect(energyTwinSource).toMatch(/@media \(max-width: 720px\)[\s\S]*\.view-switch\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+    expect(energyTwinSource).toMatch(/@media \(max-width: 720px\)[\s\S]*\.scene-kpi p\s*\{\s*display:\s*none/);
+  });
+
   it('charts water-storage benefit instead of overall PV plus storage savings', () => {
     expect(revenueTrendSource).toContain('item.storageBenefitCny');
     expect(revenueTrendSource).not.toContain('item.savingCny');

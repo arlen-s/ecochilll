@@ -36,8 +36,8 @@
 - [ ] **先写失败测试**：`energyEquipment.test.ts` 断言 `createPvArray()` 包含恰好 24 块有效光伏板及实例化电池片，全部面板中心落在教学楼或图书馆屋顶范围；`createAcStation()` 包含机房壳体、三组风机与外露管道；`createGridGateway()` 包含柜体、绝缘子和导线。每个工厂保留 `pv`、`ac`、`grid` ID、标签与可交互性。
 - [ ] **验证红灯**：`npm test -- src/three/energyEquipment.test.ts`；预期模块缺失导致失败。
 - [ ] **实现造型**：光伏板由暗蓝电池面、细金属框、分格线和倾斜支架构成，使用确定性两屋顶排布；冷热源加入低矮实体机房、风机罩/叶片、百叶与供回水管；电网接口加入变配电柜、双立柱、横担、绝缘子与悬接导线。装饰色保持克制，透明命中体继续覆盖设备主体。
-- [ ] **验证绿灯和集成**：运行设备测试并将场景文件旧工厂替换为模块导入；运行 `npm run type-check`、`npm test`。
-- [ ] **提交**：`git add src/three/energyEquipment.ts src/three/energyEquipment.test.ts src/three/createEnergyScene.ts && git commit -m "feat: detail campus energy equipment"`。
+- [ ] **验证绿灯和集成**：运行设备测试并将场景文件旧工厂替换为模块导入；把 `presentationPolish.test.ts` 的冷热源标签断言移到新设备工厂源文件，仍断言“冷热源机房”而非旧称“空调冷站”；运行 `npm run type-check`、`npm test`。
+- [ ] **提交**：`git add src/three/energyEquipment.ts src/three/energyEquipment.test.ts src/three/createEnergyScene.ts src/presentationPolish.test.ts && git commit -m "feat: detail campus energy equipment"`。
 
 ## Task 3：蓄能罐与流线
 

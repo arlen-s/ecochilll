@@ -454,7 +454,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 720px) {
   .scene-card {
-    min-height: 32rem;
+    min-height: 40rem;
   }
 
   .scene-overlay {
@@ -462,15 +462,70 @@ onBeforeUnmount(() => {
     right: 12px;
   }
 
-  .scene-overlay--bottom {
-    bottom: 12px;
+  .scene-overlay--top {
+    top: 12px;
+    gap: 7px;
   }
 
-  .view-switch__btn,
-  .zoom-controls__btn,
-  .scene-story,
-  .scene-kpi {
+  .view-switch {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
+    gap: 6px;
+  }
+
+  .view-switch__btn {
+    width: auto;
+    height: 32px;
+    padding: 0 5px;
+    font-size: 12px;
+  }
+
+  .scene-top-right {
+    justify-content: flex-end;
+  }
+
+  .zoom-controls {
+    gap: 6px;
+  }
+
+  .zoom-controls__btn {
+    width: auto;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 8px;
+  }
+
+  .scene-overlay--bottom {
+    bottom: 12px;
+    gap: 6px;
+  }
+
+  .scene-kpi {
+    box-sizing: border-box;
+    min-width: 0;
+    width: calc((100% - 6px) / 2);
+    padding: 8px 10px;
+  }
+
+  .scene-kpi--wide {
+    width: 100%;
+  }
+
+  .scene-kpi strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+
+  .scene-kpi p {
+    display: none;
+  }
+
+  .scene-story {
+    width: 100%;
+    max-width: none;
   }
 }
 
