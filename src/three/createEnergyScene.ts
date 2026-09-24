@@ -4,6 +4,8 @@ import type { FocusView, OperatingMode, ScenarioMode, ThermalStorageMetrics } fr
 import { deriveThermalVisualState } from './thermalVisualState';
 import { createCampusBuilding } from './campusBuildings';
 import { createAcStation, createGridGateway, createPvArray } from './energyEquipment';
+import { createThermalTank } from './thermalTankModel';
+import { createEnergyFlowPaths, type FlowPath } from './flowVisuals';
 
 interface HoverPayload {
   id: string;
@@ -15,38 +17,6 @@ interface HoverPayload {
 interface SceneOptions {
   onHover?: (payload: HoverPayload | null) => void;
   onSelect?: (id: string) => void;
-}
-
-interface FlowParticle {
-  mesh: THREE.Mesh;
-  offset: number;
-}
-
-interface FlowPath {
-  id: string;
-  curve: THREE.CatmullRomCurve3;
-  particles: FlowParticle[];
-  line: THREE.Line;
-  glow: THREE.Mesh<THREE.TubeGeometry, THREE.MeshBasicMaterial>;
-  color: THREE.Color;
-  visibleFactor: number;
-  speed: number;
-  phase: number;
-}
-
-interface ThermalTankVisuals {
-  group: THREE.Group;
-  storedLayer: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>;
-  returnLayer: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>;
-  interfaceSurface: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
-  interfaceRim: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>;
-  pulseRing: THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>;
-  shellMaterial: THREE.MeshStandardMaterial;
-  capMaterial: THREE.MeshStandardMaterial;
-  rimMaterial: THREE.MeshStandardMaterial;
-  pipeMaterial: THREE.MeshStandardMaterial;
-  internalBottom: number;
-  internalHeight: number;
 }
 
 const viewPresets: Record<FocusView, { position: THREE.Vector3; target: THREE.Vector3 }> = {
@@ -68,7 +38,11 @@ const viewPresets: Record<FocusView, { position: THREE.Vector3; target: THREE.Ve
   },
 };
 
-const getResponsivePreset = (preset: { position: THREE.Vector3; target: THREE.Vector3 }, aspect: number) => {
+export const getResponsivePreset = (
+  preset: { position: THREE.Vector3; target: THREE.Vector3 },
+  aspect: number,
+  focus: FocusView,
+) => {
   if (aspect >= 1.45) {
     return {
       position: preset.position.clone(),
@@ -78,7 +52,7 @@ const getResponsivePreset = (preset: { position: THREE.Vector3; target: THREE.Ve
 
   const aspectFactor = THREE.MathUtils.clamp((1.45 - aspect) / 0.55, 0, 1);
   const offset = preset.position.clone().sub(preset.target);
-  offset.multiplyScalar(1 + aspectFactor * 0.18);
+  offset.multiplyScalar(1 + aspectFactor * (focus === 'overview' ? 1.15 : 0.18));
   offset.y += 0.6 + aspectFactor * 0.9;
 
   return {
@@ -155,17 +129,6 @@ const findInteractiveTarget = (object: THREE.Object3D | null) => {
   return current;
 };
 
-const makeLabelMaterial = (color: string) =>
-  new THREE.MeshStandardMaterial({
-    color,
-    emissive: color,
-    emissiveIntensity: 0.4,
-    roughness: 0.22,
-    metalness: 0.78,
-    transparent: true,
-    opacity: 0.96,
-  });
-
 const createRoundedPlatform = () => {
   const platform = new THREE.Group();
   const base = new THREE.Mesh(
@@ -195,188 +158,6 @@ const createRoundedPlatform = () => {
   platform.add(innerGrid);
 
   return platform;
-};
-
-const createThermalTank = (): ThermalTankVisuals => {
-  const group = new THREE.Group();
-  group.position.set(-10.2, 0, 6.2);
-  group.userData = { id: 'storage', label: '分层蓄能水罐', interactive: true };
-
-  const internalBottom = 0.38;
-  const internalHeight = 3.72;
-  const storedLayerMaterial = new THREE.MeshStandardMaterial({
-    color: '#29d7ff',
-    emissive: '#29d7ff',
-    emissiveIntensity: 0.52,
-    roughness: 0.18,
-    metalness: 0.05,
-    transparent: true,
-    opacity: 0.68,
-    depthWrite: false,
-  });
-  const returnLayerMaterial = new THREE.MeshStandardMaterial({
-    color: '#315b9e',
-    emissive: '#315b9e',
-    emissiveIntensity: 0.28,
-    roughness: 0.28,
-    metalness: 0.04,
-    transparent: true,
-    opacity: 0.42,
-    depthWrite: false,
-  });
-  const storedLayer = new THREE.Mesh(new THREE.CylinderGeometry(1.12, 1.12, 1, 40), storedLayerMaterial);
-  const returnLayer = new THREE.Mesh(new THREE.CylinderGeometry(1.12, 1.12, 1, 40), returnLayerMaterial);
-  storedLayer.renderOrder = 1;
-  returnLayer.renderOrder = 1;
-  group.add(storedLayer, returnLayer);
-
-  const interfaceSurface = new THREE.Mesh(
-    new THREE.CircleGeometry(1.11, 48),
-    new THREE.MeshBasicMaterial({
-      color: '#29d7ff',
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.24,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
-  );
-  interfaceSurface.rotation.x = -Math.PI / 2;
-  interfaceSurface.renderOrder = 2;
-
-  const interfaceRim = new THREE.Mesh(
-    new THREE.TorusGeometry(1.14, 0.035, 8, 48),
-    new THREE.MeshBasicMaterial({
-      color: '#29d7ff',
-      transparent: true,
-      opacity: 0.55,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
-  );
-  interfaceRim.rotation.x = Math.PI / 2;
-  interfaceRim.renderOrder = 3;
-
-  const pulseRing = new THREE.Mesh(
-    new THREE.TorusGeometry(1.7, 0.045, 8, 48),
-    new THREE.MeshBasicMaterial({
-      color: '#28e0ff',
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
-  );
-  pulseRing.rotation.x = Math.PI / 2;
-  pulseRing.renderOrder = 3;
-  group.add(interfaceSurface, interfaceRim, pulseRing);
-
-  const shellMaterial = new THREE.MeshStandardMaterial({
-      color: '#85b5cc',
-      emissive: '#3de1ff',
-      emissiveIntensity: 0.24,
-      roughness: 0.3,
-      metalness: 0.72,
-      transparent: true,
-      opacity: 0.32,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-  const shell = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.46, 1.46, 4.35, 40, 1, true),
-    shellMaterial,
-  );
-  shell.position.y = 2.25;
-  shell.renderOrder = 2;
-  group.add(shell);
-
-  const capMaterial = new THREE.MeshStandardMaterial({
-    color: '#163d58',
-    emissive: '#3de1ff',
-    emissiveIntensity: 0.3,
-    roughness: 0.26,
-    metalness: 0.8,
-  });
-  const topCap = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.46, 0.18, 40), capMaterial);
-  topCap.position.y = 4.48;
-  const bottomCap = new THREE.Mesh(new THREE.CylinderGeometry(1.46, 1.5, 0.2, 40), capMaterial);
-  bottomCap.position.y = 0.1;
-  group.add(topCap, bottomCap);
-
-  const rimMaterial = new THREE.MeshStandardMaterial({
-    color: '#9cc8da',
-    emissive: '#3de1ff',
-    emissiveIntensity: 0.38,
-    roughness: 0.2,
-    metalness: 0.9,
-  });
-  [0.28, 2.25, 4.3].forEach((height) => {
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(1.49, 0.075, 10, 48), rimMaterial);
-    rim.rotation.x = Math.PI / 2;
-    rim.position.y = height;
-    group.add(rim);
-  });
-
-  const insulationBand = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.51, 1.51, 0.34, 40, 1, true),
-    new THREE.MeshStandardMaterial({
-      color: '#d3eff7',
-      emissive: '#4bc7df',
-      emissiveIntensity: 0.18,
-      roughness: 0.62,
-      metalness: 0.35,
-      transparent: true,
-      opacity: 0.68,
-    }),
-  );
-  insulationBand.position.y = 3.55;
-  group.add(insulationBand);
-
-  const pipeMaterial = new THREE.MeshStandardMaterial({
-    color: '#24556d',
-    emissive: '#3de1ff',
-    emissiveIntensity: 0.42,
-    roughness: 0.24,
-    metalness: 0.78,
-  });
-  const upperPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 1.15, 18), pipeMaterial);
-  upperPipe.rotation.z = Math.PI / 2;
-  upperPipe.position.set(1.85, 3.45, 0);
-  const lowerPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 1.15, 18), pipeMaterial);
-  lowerPipe.rotation.z = Math.PI / 2;
-  lowerPipe.position.set(1.85, 1.05, 0);
-  group.add(upperPipe, lowerPipe);
-
-  const skid = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.18, 1.15), capMaterial);
-  skid.position.set(2.25, 0.18, 0.72);
-  const pump = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.72, 24), pipeMaterial);
-  pump.rotation.z = Math.PI / 2;
-  pump.position.set(2.25, 0.65, 0.72);
-  const motor = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.72), makeLabelMaterial('#46b3ff'));
-  motor.position.set(2.92, 0.65, 0.72);
-  group.add(skid, pump, motor);
-
-  const hitTarget = new THREE.Mesh(
-    new THREE.BoxGeometry(5.4, 4.9, 3.2),
-    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
-  );
-  hitTarget.position.set(0.8, 2.35, 0.3);
-  group.add(hitTarget);
-
-  return {
-    group,
-    storedLayer,
-    returnLayer,
-    interfaceSurface,
-    interfaceRim,
-    pulseRing,
-    shellMaterial,
-    capMaterial,
-    rimMaterial,
-    pipeMaterial,
-    internalBottom,
-    internalHeight,
-  };
 };
 
 const createSunAndClouds = () => {
@@ -442,50 +223,6 @@ const createParticles = () => {
   );
 };
 
-const createFlowPath = (id: string, points: THREE.Vector3[], color: string, speed: number) => {
-  const curve = new THREE.CatmullRomCurve3(points);
-  const sampled = curve.getPoints(72);
-  const geometry = new THREE.BufferGeometry().setFromPoints(sampled);
-  const line = new THREE.Line(
-    geometry,
-    new THREE.LineBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.48,
-    }),
-  );
-
-  const glow = new THREE.Mesh(
-    new THREE.TubeGeometry(curve, 72, 0.13, 5, false),
-    new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.14,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    }),
-  );
-
-  const particleGeometry = new THREE.ConeGeometry(0.15, 0.42, 8);
-  const particleMaterial = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
-  const particles = Array.from({ length: 8 }, (_, index) => ({
-    mesh: new THREE.Mesh(particleGeometry, particleMaterial),
-    offset: index / 8,
-  }));
-
-  return {
-    id,
-    curve,
-    particles,
-    line,
-    glow,
-    color: new THREE.Color(color),
-    visibleFactor: 1,
-    speed,
-    phase: 0,
-  } satisfies FlowPath;
-};
-
 export const createEnergyScene = (container: HTMLElement, options: SceneOptions = {}) => {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#041120');
@@ -537,35 +274,10 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
   const flowGroup = new THREE.Group();
   scene.add(flowGroup);
 
-  const flows: FlowPath[] = [
-    createFlowPath(
-      'pv-plant',
-      [new THREE.Vector3(-2.2, 6.3, 0.8), new THREE.Vector3(0.4, 5.2, 4), new THREE.Vector3(4.2, 2.2, 5.7)],
-      '#15f5ba',
-      0.16,
-    ),
-    createFlowPath(
-      'grid-plant',
-      [new THREE.Vector3(12.5, 4.6, 4.8), new THREE.Vector3(11, 3.2, 5.5), new THREE.Vector3(6.8, 1.8, 5.8)],
-      '#ff9d7f',
-      0.12,
-    ),
-    createFlowPath(
-      'plant-storage',
-      [new THREE.Vector3(4.4, 1.6, 5.8), new THREE.Vector3(-2.4, 2.8, 6.6), new THREE.Vector3(-8.35, 3.45, 6.2)],
-      '#28e0ff',
-      0.18,
-    ),
-    createFlowPath(
-      'storage-buildings',
-      [new THREE.Vector3(-8.35, 1.05, 6.2), new THREE.Vector3(-5.4, 1.4, 3.9), new THREE.Vector3(-1.4, 1.5, 1.7)],
-      '#4d8dff',
-      0.2,
-    ),
-  ];
+  const flows: FlowPath[] = createEnergyFlowPaths();
 
   flows.forEach((flow) => {
-    flowGroup.add(flow.glow, flow.line);
+    flowGroup.add(flow.pipe, flow.glow, flow.line);
     flow.particles.forEach((particle) => flowGroup.add(particle.mesh));
   });
 
@@ -576,7 +288,7 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
   let zoomScale = 1;
   const buildPresetForFocus = (nextFocus: FocusView) =>
     applyZoomScaleToPreset(
-      getResponsivePreset(viewPresets[nextFocus], container.clientWidth / Math.max(container.clientHeight, 1)),
+      getResponsivePreset(viewPresets[nextFocus], container.clientWidth / Math.max(container.clientHeight, 1), nextFocus),
       zoomScale,
     );
   const getCurrentPreset = () => buildPresetForFocus(focus);
@@ -704,7 +416,7 @@ export const createEnergyScene = (container: HTMLElement, options: SceneOptions 
   };
 
   const syncZoomScaleFromCamera = () => {
-    const basePreset = getResponsivePreset(viewPresets[focus], container.clientWidth / Math.max(container.clientHeight, 1));
+    const basePreset = getResponsivePreset(viewPresets[focus], container.clientWidth / Math.max(container.clientHeight, 1), focus);
     const baseDistance = basePreset.position.distanceTo(basePreset.target);
     const currentDistance = camera.position.distanceTo(controls.target);
     zoomScale = THREE.MathUtils.clamp(currentDistance / Math.max(baseDistance, 0.0001), 0.68, 1.85);
