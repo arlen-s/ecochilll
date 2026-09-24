@@ -186,4 +186,44 @@ const live = computed(() => store.liveSnapshot);
     border-radius: 24px;
   }
 }
+
+@media (min-width: 1800px) and (min-height: 1000px) {
+  .left-panel {
+    grid-template-rows: minmax(0, 0.97fr) minmax(0, 0.92fr) minmax(0, 0.78fr);
+    overflow: hidden;
+  }
+
+  .metric-stack,
+  .weather-list {
+    gap: 6px;
+  }
+
+  .metric-row,
+  .weather-list article {
+    padding: 6px 8px;
+  }
+
+  .metric-row strong,
+  .weather-list strong {
+    font-size: 15px;
+  }
+
+  .weather-panel {
+    grid-template-columns: 88px 1fr;
+    gap: 8px;
+  }
+
+  .weather-globe {
+    min-height: 88px;
+  }
+
+  .chart-wrap {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .chart-wrap :deep(.chart) {
+    min-height: 0;
+  }
+}
 </style>

@@ -46,16 +46,50 @@
         </footer>
       </article>
     </div>
+
+    <button class="ai-detail-trigger panel-action-btn" type="button" @click="showRules = true">查看策略规则</button>
   </SectionCard>
+
+  <FocusPanelModal
+    :visible="showRules"
+    title="AI 策略规则"
+    eyebrow="AI DISPATCH"
+    :description="ai.summary"
+    @close="showRules = false"
+  >
+    <div class="ai-modal-outcome">
+      <span>预期收益 ¥{{ ai.expectedBenefitCny }}</span>
+      <span>预期减碳 {{ ai.expectedCarbonKg }} kg</span>
+      <p>{{ ai.recommendation }}</p>
+    </div>
+    <div class="rule-list rule-list--modal">
+      <article v-for="rule in ai.strategyRules" :key="rule.id" class="rule-card">
+        <div class="rule-card__head">
+          <h5>{{ rule.title }}</h5>
+          <span>{{ rule.score }}分</span>
+        </div>
+        <div class="rule-track">
+          <div class="rule-track__bar" :style="{ width: `${rule.score}%` }"></div>
+        </div>
+        <p>{{ rule.description }}</p>
+        <footer>
+          <span>峰值优化 {{ rule.expectedSavingPct.toFixed(1) }}%</span>
+          <span>收益 ¥{{ rule.expectedBenefitCny }}</span>
+        </footer>
+      </article>
+    </div>
+  </FocusPanelModal>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
+import FocusPanelModal from '@/components/common/FocusPanelModal.vue';
 import SectionCard from '@/components/layout/SectionCard.vue';
 import { useDashboardStore } from '@/store/dashboard';
 
 const store = useDashboardStore();
 const ai = computed(() => store.scenarioData.ai);
+const showRules = ref(false);
 </script>
 
 <style scoped lang="scss">
@@ -186,6 +220,23 @@ const ai = computed(() => store.scenarioData.ai);
   overflow: hidden;
 }
 
+.ai-detail-trigger {
+  display: none;
+}
+
+.ai-modal-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.ai-modal-outcome p {
+  width: 100%;
+  margin: 0;
+  color: var(--text-soft);
+}
+
 @media (max-width: 1200px) {
   .ai-header {
     grid-template-columns: minmax(0, 1fr);
@@ -210,6 +261,67 @@ const ai = computed(() => store.scenarioData.ai);
   .rule-card footer {
     flex-wrap: wrap;
     gap: 6px;
+  }
+}
+
+@media (min-width: 1800px) and (min-height: 1000px) {
+  .ai-header {
+    grid-template-columns: minmax(0, 1fr) 84px;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .ai-header h4 {
+    margin-bottom: 3px;
+    font-size: 14px;
+  }
+
+  .ai-header p {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    font-size: 11px;
+  }
+
+  .confidence {
+    border-radius: 10px;
+  }
+
+  .confidence strong {
+    font-size: 18px;
+  }
+
+  .ai-outcome {
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .outcome-item {
+    padding: 5px 7px;
+  }
+
+  .outcome-item span {
+    margin-bottom: 2px;
+    font-size: 11px;
+  }
+
+  .outcome-item strong {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    font-size: 12px;
+  }
+
+  .rule-list:not(.rule-list--modal) {
+    display: none;
+  }
+
+  .ai-detail-trigger {
+    display: block;
+    width: 100%;
+    margin-top: 6px;
   }
 }
 </style>

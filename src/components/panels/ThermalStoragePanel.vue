@@ -188,4 +188,40 @@ const stateLabel = computed(() => {
 .storage-state--standby {
   color: var(--yellow);
 }
+
+@media (min-width: 1800px) and (min-height: 1000px) {
+  .storage-level {
+    margin-bottom: 6px;
+  }
+
+  .storage-level__label {
+    margin-bottom: 4px;
+  }
+
+  .storage-level__label strong {
+    font-size: 16px;
+  }
+
+  .storage-metrics {
+    gap: 5px;
+  }
+
+  .storage-metric {
+    padding: 6px 8px;
+  }
+
+  .storage-metric strong {
+    margin-top: 2px;
+    font-size: 12px;
+  }
+
+  .storage-metric:nth-last-child(-n + 4) {
+    display: none;
+  }
+
+  .storage-detail {
+    min-height: 30px;
+    margin-top: 6px;
+  }
+}
 </style>

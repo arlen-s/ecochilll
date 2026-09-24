@@ -189,6 +189,7 @@ onBeforeUnmount(() => {
   gap: 10px;
   min-height: 58px;
   padding: 8px 14px;
+  padding-right: 190px;
   border-radius: 18px;
 }
 

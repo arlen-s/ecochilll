@@ -103,6 +103,7 @@ let sceneApi:
       dispose: () => void;
     }
   | null = null;
+let resizeObserver: ResizeObserver | null = null;
 
 const handleResize = () => sceneApi?.resize();
 
@@ -124,6 +125,8 @@ onMounted(() => {
   sceneApi.setFocus(store.focus);
   sceneApi.updateAlerts(store.activeAlerts.map((item) => item.nodeId));
   sceneApi.updateSelected(store.selectedNodeId);
+  resizeObserver = new ResizeObserver(handleResize);
+  resizeObserver.observe(sceneRoot.value);
   window.addEventListener('resize', handleResize);
 });
 
@@ -164,6 +167,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
   window.removeEventListener('resize', handleResize);
   sceneApi?.dispose();
 });

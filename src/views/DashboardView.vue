@@ -105,4 +105,39 @@ onBeforeUnmount(() => {
     gap: 10px;
   }
 }
+
+@media (min-width: 1800px) and (min-height: 1000px) {
+  .dashboard-shell {
+    height: 100dvh;
+    min-height: 0;
+    padding: 10px;
+    gap: 10px;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    overflow: hidden;
+  }
+
+  .dashboard-main {
+    min-height: 0;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .dashboard-main__left,
+  .dashboard-main__right,
+  .dashboard-main__scene {
+    min-height: 0;
+  }
+
+  .dashboard-main :deep(.panel-grid) {
+    gap: 8px;
+  }
+
+  .dashboard-main :deep(.section-card) {
+    padding: 10px;
+  }
+
+  .dashboard-main :deep(.section-title) {
+    margin-bottom: 6px;
+  }
+}
 </style>

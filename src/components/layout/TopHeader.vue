@@ -388,4 +388,67 @@ const kpis = computed(() => [
     width: 100%;
   }
 }
+
+@media (min-width: 1800px) and (min-height: 1000px) {
+  .top-header {
+    grid-template-columns: 300px minmax(0, 1fr) 500px;
+    grid-template-rows: auto auto;
+    gap: 8px;
+    padding: 10px 14px;
+  }
+
+  .brand-mark {
+    width: 40px;
+    height: 40px;
+  }
+
+  .top-header__brand h1 {
+    font-size: 24px;
+  }
+
+  .system-status {
+    gap: 6px;
+    font-size: 11px;
+  }
+
+  .summary {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 11px;
+  }
+
+  .clock {
+    font-size: 26px;
+  }
+
+  .kpi-card {
+    padding: 6px 10px;
+  }
+
+  .kpi-card small {
+    margin-bottom: 2px;
+  }
+
+  .kpi-card strong {
+    font-size: 20px;
+  }
+
+  .top-header__scenes {
+    flex-wrap: nowrap;
+    gap: 5px;
+  }
+
+  .season-control__button {
+    min-width: 65px;
+    padding: 3px 5px;
+  }
+
+  .scene-chip {
+    height: 32px;
+    padding: 0 8px;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+}
 </style>

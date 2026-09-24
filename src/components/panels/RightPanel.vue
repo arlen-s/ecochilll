@@ -146,4 +146,40 @@ const live = computed(() => store.liveSnapshot);
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+@media (min-width: 1800px) and (min-height: 1000px) {
+  .right-panel {
+    grid-template-rows: minmax(0, 0.98fr) minmax(0, 0.94fr) minmax(0, 1.08fr);
+    overflow: hidden;
+  }
+
+  .headline {
+    margin-bottom: 8px;
+  }
+
+  .headline strong {
+    font-size: 19px;
+  }
+
+  .zone-list {
+    gap: 6px;
+    margin-bottom: 0;
+  }
+
+  .zone-list article {
+    padding: 7px 8px;
+  }
+
+  .zone-list h4 {
+    font-size: 12px;
+  }
+
+  .zone-meta span {
+    font-size: 11px;
+  }
+
+  .load-chart {
+    display: none;
+  }
+}
 </style>
